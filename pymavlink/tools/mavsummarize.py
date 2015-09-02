@@ -82,7 +82,7 @@ def PrintSummary(logfile):
             # Save this GPS message to do simple distance calculations with
             last_gps_msg = m
 
-        elif m.get_type() == 'HEARTBEAT':
+        elif m.get_type() == 'HEARTBEAT' and m.type != mavutil.mavlink.MAV_TYPE_GCS:
             if (m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_GUIDED_ENABLED or
                 m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_AUTO_ENABLED) and autonomous == False:
                 autonomous = True
