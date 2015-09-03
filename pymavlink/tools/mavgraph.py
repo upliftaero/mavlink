@@ -141,6 +141,9 @@ def plotit(x, y, fields, colors=[]):
         print("No data to graph")
         return
 
+def mktime(timestring):
+    return datetime.datetime.strptime(timestring, '%H:%M')
+
 
 from argparse import ArgumentParser
 parser = ArgumentParser(description=__doc__)
@@ -160,6 +163,8 @@ parser.add_argument("--flightmode", default=None,
                     help="Choose the plot background according to the active flight mode of the specified type, e.g. --flightmode=apm for ArduPilot or --flightmode=px4 for PX4 stack logs.  Cannot be specified with --xaxis.")
 parser.add_argument("--dialect", default="ardupilotmega", help="MAVLink dialect")
 parser.add_argument("--output", default=None, help="provide an output format")
+parser.add_argument("--time_start", default=None, type=mktime, help="start time for graph")
+parser.add_argument("--time_end", default=None, type=mktime, help="end time for graph")
 parser.add_argument("logs_fields", metavar="<LOG or FIELD>", nargs="+")
 args = parser.parse_args()
 
@@ -242,11 +247,27 @@ def process_file(filename):
     print("Processing %s" % filename)
     mlog = mavutil.mavlink_connection(filename, notimestamps=args.notimestamps, zero_time_base=args.zero_time_base, dialect=args.dialect)
     vars = {}
+    first = True
 
     while True:
         msg = mlog.recv_match(args.condition)
         if msg is None: break
-        tdays = matplotlib.dates.date2num(datetime.datetime.fromtimestamp(msg._timestamp))
+        timestamp = datetime.datetime.fromtimestamp(msg._timestamp);
+        if first:
+            # This kind of a bunch of hacks!!
+            # Still an hour off - must be a timezone issue??
+            if args.time_start is not None:
+                st = args.time_start.replace(year = timestamp.year, month = timestamp.month, day = timestamp.day)
+                args.time_start = time.mktime(st.timetuple())
+            if args.time_end is not None:
+                et = args.time_end.replace(year = timestamp.year, month = timestamp.month, day = timestamp.day)
+                args.time_end   = time.mktime(et.timetuple())
+            first = False
+        if args.time_start is not None and msg._timestamp < args.time_start:
+            continue
+        if args.time_end is not None and msg._timestamp > args.time_end:
+            continue
+        tdays = matplotlib.dates.date2num(timestamp)
         add_data(tdays, msg, mlog.messages, mlog.flightmode)
 
 if len(filenames) == 0:
