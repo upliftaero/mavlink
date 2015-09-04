@@ -36,11 +36,16 @@ colourmap = {
         'CRUISE'    : (  0, 1.0, 1.0)
         },
     'px4' : {
-        'MANUAL'    : (1.0,   0,   0),
-        'SEATBELT'  : (  0.5, 0.5,   0),
-        'EASY'      : (  0, 1.0,   0),
-        'AUTO'    : (  0,   0, 1.0),
-        'UNKNOWN'    : (  1.0,   1.0, 1.0)
+        'MANUAL'    : ( 1.0,    0,      0),      # Red
+        'SEATBELT'  : (  0.5,   0.5,    0),    # Orange
+        'EASY'      : (  0,     1.0,    0),      # Green
+        'AUTO'      : (  0,     0,      1.0),      # Blue
+        'UNKNOWN'   : (  1.0,   1.0,    1.0),   # White (or grey)
+        'STABILIZE' : (  0.5,   0,      0.5),     # Purple
+        'LOITER'    : (  0,     0.5,    0.5),     # Teal?
+        'RTL'       : (  0.25,     0,    0),     # Pink?
+        'POSHOLD'   : (  0.25,     0.5,  0.25),     # ???
+        'AUTOTUNE'   : (  0.0,     1.0,  0),     # ???
         }
     }
 
@@ -143,7 +148,6 @@ def plotit(x, y, fields, colors=[]):
 
 def mktime(timestring):
     return datetime.datetime.strptime(timestring, '%H:%M')
-
 
 from argparse import ArgumentParser
 parser = ArgumentParser(description=__doc__)
