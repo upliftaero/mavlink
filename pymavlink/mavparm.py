@@ -1,8 +1,9 @@
 '''
-module for loading/saving sets of mavlink parameters
+module for loading/saving and validating sets of mavlink parameters
 '''
 
 import fnmatch, math, time
+import pprint, ast
 
 class MAVParmDict(dict):
     def __init__(self, *args):
@@ -50,6 +51,18 @@ class MAVParmDict(dict):
         if verbose:
             print("Saved %u parameters to %s" % (count, filename))
 
+    def save_template(self, filename):
+        '''save default valid ranges for parameters to a file'''
+        f = open(filename, mode='w')
+        k = list(self.keys())
+        template = {}
+        for p in k:
+            param_template = {}
+            param_template['low_range'] = self.__getitem__(p)      # Why __getitem__ (see above) ?
+            param_template['hi_range'] = self.__getitem__(p)       # Turn these into constants
+            param_template['ignore'] = False
+            template[p] = param_template
+        pprint.pprint(template, stream=f)
 
     def load(self, filename, wildcard='*', mav=None, check=True):
         '''load parameters from a file'''
@@ -122,4 +135,24 @@ class MAVParmDict(dict):
             elif abs(self[k] - other[k]) > self.mindelta:
                 print("%-16.16s %12.4f %12.4f" % (k, other[k], self[k]))
                 
-        
+    def validate(self, filename):
+        '''validate parameters against a range validation file'''
+        other = MAVParmDict()
+        import ast
+
+        with open(filename, 'r') as f:
+            s = f.read()
+            validation_parameters = ast.literal_eval(s)
+        keys = sorted(list(set(self.keys()).union(set(validation_parameters.keys()))))
+        for k in keys:
+            if not k in validation_parameters:
+                print("Unexpected parameter: " + k)
+            elif not k in self:
+                print("Missing parameter: " + k)
+            else:
+                validator = validation_parameters[k]
+                value = self[k]
+                if not validator['ignore'] and (value < validator['low_range'] or value > validator['hi_range']):
+                    print("Parameter value out of range: %s = %8.4f.  Range: %8.4f-%8.4f" %
+                          (k, self[k], validator['low_range'],validator['hi_range']))
+
