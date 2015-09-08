@@ -2,7 +2,7 @@
 module for loading/saving and validating sets of mavlink parameters
 '''
 
-import fnmatch, math, time
+import fnmatch, math, time, datetime
 import pprint, ast
 
 class MAVParmDict(dict):
@@ -55,21 +55,32 @@ class MAVParmDict(dict):
         '''save default valid ranges for parameters to a file'''
         f = open(filename, mode='w')
         k = list(self.keys())
+        k.sort()
         template = {}
         meta_data = {}
         meta_data['uav-type'] = '**** e.g. Fixed Wing ****'
-        meta_data['uav-model'] = '**** e.g. Bixler 3 ****'
+        meta_data['uav-model'] = '**** e.g. Waliid v2 ****'
+        meta_data['specific-aircraft'] = '**** e.g. Waliid 6 ****'
         meta_data['version'] = '0.2'
-        meta_data['creation-date'] = datetime.now()
+        meta_data['creation-date'] = str(datetime.datetime.now())
+        meta_data['notes'] = "Note: This is a validation template file created based on the current set of parameters loaded.  " \
+                             "The validation template file is a dictionary and supports several parameter validation modes.  " \
+                             "The modes 'ignore', 'exact_match, hi_bounds, and low_bounds may be used in any combnation.  "\
+                             "'ignore' overrides all other modes."
+        meta_data['notes-2'] = "Note 2: The range validation entries will only be output for the first 4 parmeters " \
+                               " under teh assumption that most parameters will use 'exact_match'"
         template['meta-data'] = meta_data
         parameters = {}
         template['parameters'] = parameters
+        range_counter = 0
         for p in k:
             param_template = {}
-            value = self[p]
-            param_template['low_range'] = value      # Why __getitem__ (see above) ?  vs. []
-            param_template['hi_bounds'] = value       # Create constants for all of the magic keys
-            param_template['low_bounds'] = value       # Create constants for all of the magic keys
+            value = self[p]                                   # Why __getitem__ (see above) ?  vs. []
+            param_template['exact_match'] = value
+            if range_counter < 4:                      #output the range parameters only for the first 4 parameters
+                param_template['hi_bounds'] = value       # Create constants for all of the magic keys
+                param_template['low_bounds'] = value       # Create constants for all of the magic keys
+                range_counter += 1
             param_template['ignore'] = False
             parameters[p] = param_template
         pprint.pprint(template, stream=f)
@@ -170,10 +181,10 @@ class MAVParmDict(dict):
                 validator = validation_parameters[k]
                 value = self[k]
                 if not validator['ignore']:
-                    if value != validator['match']:
+                    if value != validator['excat_match']:
                         print("Parameter value does not match: %s = %8.4f.  Match: %8.4f" %
                             (k, self[k], validator['match']))
-                    if value < validator['low_range'] or value > validator['hi_range']:
+                    if value < validator['low_bounds'] or value > validator['hi_bounds']:
                         print("Parameter value out of range: %s = %8.4f.  Range: %8.4f-%8.4f" %
-                            (k, self[k], validator['low_range'],validator['hi_range']))
+                            (k, self[k], validator['low_bounds'],validator['hi_bounds']))
 
