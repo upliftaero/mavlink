@@ -56,12 +56,22 @@ class MAVParmDict(dict):
         f = open(filename, mode='w')
         k = list(self.keys())
         template = {}
+        meta_data = {}
+        meta_data['uav-type'] = '**** e.g. Fixed Wing ****'
+        meta_data['uav-model'] = '**** e.g. Bixler 3 ****'
+        meta_data['version'] = '0.2'
+        meta_data['creation-date'] = datetime.now()
+        template['meta-data'] = meta_data
+        parameters = {}
+        template['parameters'] = parameters
         for p in k:
             param_template = {}
-            param_template['low_range'] = self.__getitem__(p)      # Why __getitem__ (see above) ?
-            param_template['hi_range'] = self.__getitem__(p)       # Turn these into constants
+            value = self[p]
+            param_template['low_range'] = value      # Why __getitem__ (see above) ?  vs. []
+            param_template['hi_bounds'] = value       # Create constants for all of the magic keys
+            param_template['low_bounds'] = value       # Create constants for all of the magic keys
             param_template['ignore'] = False
-            template[p] = param_template
+            parameters[p] = param_template
         pprint.pprint(template, stream=f)
 
     def load(self, filename, wildcard='*', mav=None, check=True):
@@ -142,7 +152,14 @@ class MAVParmDict(dict):
 
         with open(filename, 'r') as f:
             s = f.read()
-            validation_parameters = ast.literal_eval(s)
+            validator = ast.literal_eval(s)
+        metadata = validator['meta-data']
+        mkeys = metadata.keys()
+        print("Validation file metadata:")
+        for k in mkeys:
+            print("%s: $s" % (k, metadata[k]))
+        print("Validation results:")
+        validation_parameters = validator['parameters']
         keys = sorted(list(set(self.keys()).union(set(validation_parameters.keys()))))
         for k in keys:
             if not k in validation_parameters:
@@ -152,7 +169,11 @@ class MAVParmDict(dict):
             else:
                 validator = validation_parameters[k]
                 value = self[k]
-                if not validator['ignore'] and (value < validator['low_range'] or value > validator['hi_range']):
-                    print("Parameter value out of range: %s = %8.4f.  Range: %8.4f-%8.4f" %
-                          (k, self[k], validator['low_range'],validator['hi_range']))
+                if not validator['ignore']:
+                    if value != validator['match']:
+                        print("Parameter value does not match: %s = %8.4f.  Match: %8.4f" %
+                            (k, self[k], validator['match']))
+                    if value < validator['low_range'] or value > validator['hi_range']:
+                        print("Parameter value out of range: %s = %8.4f.  Range: %8.4f-%8.4f" %
+                            (k, self[k], validator['low_range'],validator['hi_range']))
 
