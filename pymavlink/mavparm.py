@@ -68,7 +68,7 @@ class MAVParmDict(dict):
                              "The modes 'ignore', 'exact_match, hi_bounds, and low_bounds may be used in any combnation.  "\
                              "'ignore' overrides all other modes."
         meta_data['notes-2'] = "Note 2: The range validation entries will only be output for the first 4 parmeters " \
-                               " under teh assumption that most parameters will use 'exact_match'"
+                               " under the assumption that most parameters will use 'exact_match'"
         template['meta-data'] = meta_data
         parameters = {}
         template['parameters'] = parameters
@@ -78,8 +78,8 @@ class MAVParmDict(dict):
             value = self[p]                                   # Why __getitem__ (see above) ?  vs. []
             param_template['exact_match'] = value
             if range_counter < 4:                      #output the range parameters only for the first 4 parameters
-                param_template['hi_bounds'] = value       # Create constants for all of the magic keys
-                param_template['low_bounds'] = value       # Create constants for all of the magic keys
+                param_template['hi_bound'] = value       # Create constants for all of the magic keys
+                param_template['low_bound'] = value       # Create constants for all of the magic keys
                 range_counter += 1
             param_template['ignore'] = False
             parameters[p] = param_template
@@ -168,7 +168,7 @@ class MAVParmDict(dict):
         mkeys = metadata.keys()
         print("Validation file metadata:")
         for k in mkeys:
-            print("%s: $s" % (k, metadata[k]))
+            print("%s: %s" % (k, metadata[k]))
         print("Validation results:")
         validation_parameters = validator['parameters']
         keys = sorted(list(set(self.keys()).union(set(validation_parameters.keys()))))
@@ -181,10 +181,10 @@ class MAVParmDict(dict):
                 validator = validation_parameters[k]
                 value = self[k]
                 if not validator['ignore']:
-                    if value != validator['excat_match']:
+                    if 'exact_match' in validator and value != validator['exact_match']: # Need to test for existence of exact match here!!  - This probably wont work if low bound is zero??
                         print("Parameter value does not match: %s = %8.4f.  Match: %8.4f" %
-                            (k, self[k], validator['match']))
-                    if value < validator['low_bounds'] or value > validator['hi_bounds']:
+                            (k, self[k], validator['exact_match']))
+                    if ('low_bound' in validator and value < validator['low_bound']) or ('hi_bound' in validator and value > validator['hi_bound']):
                         print("Parameter value out of range: %s = %8.4f.  Range: %8.4f-%8.4f" %
-                            (k, self[k], validator['low_bounds'],validator['hi_bounds']))
+                            (k, self[k], validator['low_bound'],validator['hi_bound']))
 
