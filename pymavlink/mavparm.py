@@ -5,7 +5,15 @@ module for loading/saving and validating sets of mavlink parameters
 import fnmatch, math, time, datetime
 import pprint, ast
 
+VP_MATCH        = "exact_match"     # 'VP' = Validation Parameter
+VP_IGNORE       = "ignore"
+VP_LO_BOUND     = "lo_bound"
+VP_HI_BOUND     = "hi_bound"
+KEY_META_DATA   = "meta-data"
+KEY_PARAMATERS  = "parameters"
+
 class MAVParmDict(dict):
+
     def __init__(self, *args):
         dict.__init__(self, args)
         # some parameters should not be loaded from files
@@ -63,25 +71,26 @@ class MAVParmDict(dict):
         meta_data['specific-aircraft'] = '**** e.g. Waliid 6 ****'
         meta_data['version'] = '0.2'
         meta_data['creation-date'] = str(datetime.datetime.now())
-        meta_data['notes'] = "Note: This is a validation template file created based on the current set of parameters loaded.  " \
-                             "The validation template file is a dictionary and supports several parameter validation modes.  " \
-                             "The modes 'ignore', 'exact_match, hi_bounds, and low_bounds may be used in any combnation.  "\
-                             "'ignore' overrides all other modes."
-        meta_data['notes-2'] = "Note 2: The range validation entries will only be output for the first 4 parmeters " \
-                               " under the assumption that most parameters will use 'exact_match'"
-        template['meta-data'] = meta_data
+        meta_data['notes'] = "Note: This is a validation template file created based on the current set of parameters loaded.  "\
+                             "The validation template file is a dictionary and supports several parameter validation modes.  "\
+                             "The modes '" + VP_IGNORE + "', '" + VP_MATCH + "', '" + VP_HI_BOUND + "', and '" + VP_LO_BOUND + "' may be used in any combination.  "\
+                             "'" + VP_IGNORE + "' overrides all other modes."
+        meta_data['notes-2'] = "Note 2: The range validation entries will only be output for the first 4 parameters "\
+                               " under the assumption that most parameters will use '" + VP_MATCH + "'."
+        meta_data['system_ID'] = self['SYSID_THISMAV']      # what if this does not exist?
+        template[KEY_META_DATA] = meta_data
         parameters = {}
-        template['parameters'] = parameters
+        template[KEY_PARAMATERS] = parameters
         range_counter = 0
         for p in k:
             param_template = {}
             value = self[p]                                   # Why __getitem__ (see above) ?  vs. []
-            param_template['exact_match'] = value
+            param_template[VP_MATCH] = value
             if range_counter < 4:                      #output the range parameters only for the first 4 parameters
-                param_template['hi_bound'] = value       # Create constants for all of the magic keys
-                param_template['low_bound'] = value       # Create constants for all of the magic keys
+                param_template[VP_HI_BOUND] = value
+                param_template[VP_LO_BOUND] = value
                 range_counter += 1
-            param_template['ignore'] = False
+            param_template[VP_IGNORE] = False
             parameters[p] = param_template
         pprint.pprint(template, stream=f)
 
@@ -133,6 +142,23 @@ class MAVParmDict(dict):
             print("Loaded %u parameters from %s" % (count, filename))
         return True
 
+    def load_from_validator(self, filename):        # Shouldn't we clear out the existing parameters here??
+        '''load parameters from a file'''
+        with open(filename, 'r') as f:
+            s = f.read()
+            validator = ast.literal_eval(s)
+        metadata = validator['meta-data']     # ignore this
+        validator_parameters = validator['parameters']
+        print("Loaded %u parameters from %s" % (len(validator_parameters), filename))
+        count = 0
+        for k in validator_parameters.keys():
+            if VP_MATCH in validator_parameters[k]:
+                self[k] = validator_parameters[k][VP_MATCH]
+                count += 1
+            else:
+                print("Skipping parameter: " + k)
+        print ("Accepted parameter count: " + str(count))
+
     def show(self, wildcard='*'):
         '''show parameters'''
         k = sorted(self.keys())
@@ -158,33 +184,30 @@ class MAVParmDict(dict):
                 
     def validate(self, filename):
         '''validate parameters against a range validation file'''
-        other = MAVParmDict()
-        import ast
-
         with open(filename, 'r') as f:
             s = f.read()
             validator = ast.literal_eval(s)
-        metadata = validator['meta-data']
+        metadata = validator[KEY_META_DATA]
         mkeys = metadata.keys()
         print("Validation file metadata:")
         for k in mkeys:
-            print("%s: %s" % (k, metadata[k]))
+            print("     %-20.20s: %s" % (k, metadata[k]))
         print("Validation results:")
-        validation_parameters = validator['parameters']
+        validation_parameters = validator[KEY_PARAMATERS]
         keys = sorted(list(set(self.keys()).union(set(validation_parameters.keys()))))
         for k in keys:
             if not k in validation_parameters:
-                print("Unexpected parameter: " + k)
+                print("Unexpected parameter:           " + k)
             elif not k in self:
-                print("Missing parameter: " + k)
+                print("Missing parameter:              " + k)
             else:
                 validator = validation_parameters[k]
                 value = self[k]
-                if not validator['ignore']:
-                    if 'exact_match' in validator and value != validator['exact_match']: # Need to test for existence of exact match here!!  - This probably wont work if low bound is zero??
-                        print("Parameter value does not match: %s = %8.4f.  Match: %8.4f" %
-                            (k, self[k], validator['exact_match']))
-                    if ('low_bound' in validator and value < validator['low_bound']) or ('hi_bound' in validator and value > validator['hi_bound']):
-                        print("Parameter value out of range: %s = %8.4f.  Range: %8.4f-%8.4f" %
-                            (k, self[k], validator['low_bound'],validator['hi_bound']))
+                if not validator[VP_IGNORE]:
+                    if VP_MATCH in validator and value != validator[VP_MATCH]:  #  - This probably wont work if low bound is zero??
+                        print("Parameter value does not match: %-16.16s = %12.4f.  Match value: %12.4f" %
+                            (k, self[k], validator[VP_MATCH]))
+                    if (VP_LO_BOUND in validator and value < validator[VP_LO_BOUND]) or (VP_HI_BOUND in validator and value > validator[VP_HI_BOUND]):
+                        print("Parameter value out of range:   %-16.16s = %12.4f.  Range: %12.4f-%12.4f" %
+                            (k, self[k], validator[VP_LO_BOUND],validator[VP_HI_BOUND]))
 
