@@ -70,6 +70,9 @@ class MAVParmDict(dict):
         meta_data['uav-model'] = '**** e.g. Waliid v2 ****'
         meta_data['specific-aircraft'] = '**** e.g. Waliid 6 ****'
         meta_data['version'] = '0.2'
+        meta_data['autopilot_type'] = '**** e.g. Pixhawk *****'     # Can we auto-pull this stuff?
+        meta_data['autopilot_version'] = '**** e.g. 3.3.0 *****'
+        meta_data['version'] = '0.2'
         meta_data['creation-date'] = str(datetime.datetime.now())
         meta_data['notes'] = "Note: This is a validation template file created based on the current set of parameters loaded.  "\
                              "The validation template file is a dictionary and supports several parameter validation modes.  "\

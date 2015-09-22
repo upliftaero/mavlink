@@ -6,6 +6,7 @@ Based on mavsummarize.py.
 '''
 
 import sys, time, os, glob, pprint
+#import ../mavparam
 
 # TODO: Looks like the first flight maximums are wrong
 
@@ -44,9 +45,20 @@ class Flight(dict):
         self.max_airspeed = 0.0
         self.takeoff_count = 0
         self.landing_count = 0
+        self.initial_mode = ""
         self.mode_changes = []
         self.flight_time = 0.0
         self.flying = False
+
+        self.altitude_cum = 0
+        self.altitude_count = 0
+
+        self.airspeed_cum = 0
+        self.airspeed_count = 0
+
+        self.throttle_cum = 0
+        self.throttle_count = 0
+
 
     def Takeoff(self):      # May not have been an actual detected landing - add a reason code??
         self.flying = True
@@ -58,15 +70,11 @@ class Flight(dict):
         self.landing_count += 1
 
     def EndArmed(self, total_time):
-        flight_ID_string = "Armed Flight #" + str(self["flight_number"])
-        print
-        print(flight_ID_string + " total time: " + MMSSTime(total_time))
-        print(flight_ID_string + " max altitude: " + TwoDec(self.max_altitude))
-        print(flight_ID_string + " max airspeed: " + TwoDec(self.max_airspeed))
         if self.landing_count != 1 or self.takeoff_count != 1:
             print("Unexpected takeoff/landing count: " + self.takeoff_count + " " + self.landing_count)
-        print "==== End " + flight_ID_string + " ===="
-        print
+        self['avg_airspeed'] = self.airspeed_cum / self.airspeed_count
+        self['avg_altitude'] = self.altitude_cum / self.altitude_count
+        self['avg_throttle'] = self.throttle_cum / self.throttle_count
         self['max_airspeed'] = self.max_airspeed
         self['max_altitude'] = self.max_altitude
         self['takeoff_count'] = self.takeoff_count
@@ -74,6 +82,7 @@ class Flight(dict):
         self['flight_time'] = self.flight_time
         self['total_time'] = total_time
         self['mode_changes'] = self.mode_changes
+        self['initial_mode'] = self.initial_mode
 
 class LogFile(dict):
 
@@ -137,6 +146,7 @@ class LogFile(dict):
         start_auto_time = 0
         airspeed_rise_start = 0
         airspeed_drop_start = 0
+        parameters      = {}  # Ultimately: MAVParmDict()
 
         while True:
             m = self.mlog.recv_match(condition=args.condition)
@@ -188,6 +198,12 @@ class LogFile(dict):
                 # Save this GPS message to do simple distance calculations with
                 self.last_gps_msg = m
 
+            elif m.get_type() == 'PARAM_VALUE':
+                pname = m.param_id
+                if pname in parameters:
+                    print("Parameter changed in file: " + pname + ": " + str(parameters[pname]) + " to " + str(m.param_value))
+                parameters[pname] = m.param_value
+
             elif m.get_type() == 'HEARTBEAT' and m.type != mavutil.mavlink.MAV_TYPE_GCS:
                 # Track autonomous time
                 if (m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_GUIDED_ENABLED or
@@ -209,6 +225,7 @@ class LogFile(dict):
                     start_armed_time = timestamp
                     print("==== Flight #" + str(self.flight_number) + "====")
                     flight = Flight(self.file_name, self.flight_number)
+                    flight.initial_mode = self.mlog.flightmode
                     self.flight_number += 1
                     self.flights.append(flight)
                 elif (not m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) and armed == True:
@@ -237,15 +254,25 @@ class LogFile(dict):
                             mode_change['time'] = timestamp
                             mode_change['old_mode'] = current_mode
                             mode_change['new_mode'] = m.base_mode
+                            mode_change['mode_name'] = self.mlog.flightmode
                             flight.mode_changes.append(mode_change)
                         current_mode = m.base_mode
 
 
             elif m.get_type() == 'VFR_HUD' and armed:
-                if m.airspeed > flight.max_airspeed:
-                    flight.max_airspeed = m.airspeed
-                if m.alt > flight.max_altitude:
-                    flight.max_altitude = m.alt
+                if flight.flying:
+                    # Accumulate flight statistics
+                    if m.airspeed > flight.max_airspeed:
+                        flight.max_airspeed = m.airspeed
+                    if m.alt > flight.max_altitude:
+                        flight.max_altitude = m.alt
+                    flight.altitude_cum += m.alt
+                    flight.airspeed_cum += m.airspeed
+                    flight.throttle_cum += m.throttle
+                    flight.airspeed_count += 1
+                    flight.throttle_count += 1
+                    flight.altitude_count += 1
+
 
                 self.hud_records.append(m)
 
@@ -351,6 +378,7 @@ class LogFile(dict):
             print("Warning: No absolute timestamp found in datastream. No starting time can be provided for this log.")
 
         self.total_time = timestamp - self.start_time
+        self["parameters"] = parameters
 
 
     def PrintSummary(self):
@@ -399,4 +427,5 @@ for filename in args.logs:
 
 for l in logs.values():
     l.PrintSummary()
-
+    f = open("parameter-files/" + l.file_name, mode='w')
+    pprint.pprint(l["parameters"], stream=f)
