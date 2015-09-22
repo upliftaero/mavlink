@@ -5,7 +5,7 @@ Breakout MAVLink logs by flights etc.
 Based on mavsummarize.py.
 '''
 
-import sys, time, os, glob
+import sys, time, os, glob, pprint
 
 # TODO: Looks like the first flight maximums are wrong
 
@@ -21,6 +21,8 @@ args = parser.parse_args()
 from pymavlink import mavutil
 from pymavlink.mavextra import distance_two
 
+TAKEOFF_AIRSPEED = 4.0      # meters / second
+TAKEOFF_LAND_DETECTION_HYSTERESIS = 5.0     # seconds
 
 def TimestampString(timestamp):
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
@@ -29,7 +31,7 @@ def TwoDec(number):
     return "{:.2f}".format(number)
 
 def MMSSTime(time):
-    return "{:3.0f}:{:02.0f}".format(time / 60, time % 60)
+    return "{:3.0f}:{:02.0f}".format(int(time / 60), time % 60)
 
 
 class Flight(dict):
@@ -44,21 +46,33 @@ class Flight(dict):
         self.landing_count = 0
         self.mode_changes = []
         self.flight_time = 0.0
+        self.flying = False
 
-    def EndFlight(self, time):
-        flight_ID_string = "Flight #" + str(self["flight_number"])
+    def Takeoff(self):      # May not have been an actual detected landing - add a reason code??
+        self.flying = True
+        self.takeoff_count += 1
+
+    def Land(self, flight_time):      # May not have been an actual detected landing - add a reason code??
+        self.flight_time += flight_time
+        self.flying = False
+        self.landing_count += 1
+
+    def EndArmed(self, total_time):
+        flight_ID_string = "Armed Flight #" + str(self["flight_number"])
         print
-        print flight_ID_string + " total time: " + MMSSTime(time)
-        print flight_ID_string + " max altitude: " + TwoDec(self.max_altitude)
-        print flight_ID_string + " max airspeed: " + TwoDec(self.max_airspeed)
-        print "======== End " + flight_ID_string + " ========"
+        print(flight_ID_string + " total time: " + MMSSTime(total_time))
+        print(flight_ID_string + " max altitude: " + TwoDec(self.max_altitude))
+        print(flight_ID_string + " max airspeed: " + TwoDec(self.max_airspeed))
+        if self.landing_count != 1 or self.takeoff_count != 1:
+            print("Unexpected takeoff/landing count: " + self.takeoff_count + " " + self.landing_count)
+        print "==== End " + flight_ID_string + " ===="
         print
         self['max_airspeed'] = self.max_airspeed
         self['max_altitude'] = self.max_altitude
         self['takeoff_count'] = self.takeoff_count
         self['landing_count'] = self.landing_count
         self['flight_time'] = self.flight_time
-        self['total_time'] = time
+        self['total_time'] = total_time
         self['mode_changes'] = self.mode_changes
 
 class LogFile(dict):
@@ -116,7 +130,6 @@ class LogFile(dict):
 
         autonomous      = False         # Whether the vehicle is currently autonomous at this point in the logfile
         armed           = False         # Whether the vehicle is currently armed at this point in the logfile
-        flying          = False
         current_mode    = None          # Track mode changes
         climb_state     = 0             # For now, 0 = level, 1 = climb, 2 = descent -- need to make this an enum
         vsi_state       = 0
@@ -194,14 +207,17 @@ class LogFile(dict):
 
                     # This is the logic to start a flight
                     start_armed_time = timestamp
-                    print "======== Flight #" + str(self.flight_number) + "========"
+                    print("==== Flight #" + str(self.flight_number) + "====")
                     flight = Flight(self.file_name, self.flight_number)
                     self.flight_number += 1
                     self.flights.append(flight)
                 elif (not m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) and armed == True:
                     armed = False
                     self.armed_time += timestamp - start_armed_time
-                    flight.EndFlight(timestamp - start_armed_time)
+                    if flight.flying:
+                        print("Landing (by end of arm)!! at: " + TimestampString(timestamp))
+                        flight.Land(timestamp - airspeed_rise_start)
+                    flight.EndArmed(timestamp - start_armed_time)
                     flight = None
 
                 if current_mode != m.base_mode:
@@ -215,16 +231,17 @@ class LogFile(dict):
                             mode_string += "AUTO "
                         print(TimestampString(timestamp) + ": Mode changed to 0x" + format(m.base_mode, '02x') + " " +
                                     self.mlog.flightmode + " / " + mode_string)     # Need to convert to local time here??
-                        if flying:
+                        if flight is not None and flight.flying:
                             mode_change = {}
                             # Need to use the more decoded modes
                             mode_change['time'] = timestamp
                             mode_change['old_mode'] = current_mode
-                            mode_change['ne_mode'] = m.base_mode
+                            mode_change['new_mode'] = m.base_mode
+                            flight.mode_changes.append(mode_change)
                         current_mode = m.base_mode
 
 
-            elif m.get_type() == 'VFR_HUD' and flying:
+            elif m.get_type() == 'VFR_HUD' and armed:
                 if m.airspeed > flight.max_airspeed:
                     flight.max_airspeed = m.airspeed
                 if m.alt > flight.max_altitude:
@@ -284,25 +301,23 @@ class LogFile(dict):
 
                 self.throttle_cum += m.throttle
                 self.throttle_count += 1
-                if not flying:
-                    if m.airspeed > 4.0:
+                if not flight.flying:
+                    if m.airspeed > TAKEOFF_AIRSPEED:
                         if airspeed_rise_start == 0:
                             airspeed_rise_start = timestamp
-                        elif (timestamp - airspeed_rise_start) > 5:   # This is supposed to be 5 seconds
-                            print "Takeoff!! at: " + MMSSTime(timestamp)
-                            flight.takeoff_count += 1
-                            flying = True
+                        elif (timestamp - airspeed_rise_start) > TAKEOFF_LAND_DETECTION_HYSTERESIS:
+                            print("Takeoff!! at: " + TimestampString(airspeed_rise_start))
+                            print("Detection delta t: " + MMSSTime(timestamp - airspeed_rise_start))
+                            flight.Takeoff()
                     else:
                         airspeed_rise_start = 0
                 else:
-                    if m.airspeed < 4.0:
+                    if m.airspeed < TAKEOFF_AIRSPEED:
                         if airspeed_drop_start == 0:
                             airspeed_drop_start = timestamp
-                        elif (timestamp - airspeed_drop_start) > 5:   # This is supposed to be 5 seconds
-                            print "Landing!! at: " + MMSSTime(timestamp)
-                            flight.landing_count += 1
-                            flight.flight_time += timestamp - airspeed_rise_start
-                            flying = False
+                        elif (timestamp - airspeed_drop_start) > TAKEOFF_LAND_DETECTION_HYSTERESIS:
+                            print("Landing!! at: " + TimestampString(timestamp))
+                            flight.Land(timestamp - airspeed_rise_start)
                     else:
                         airspeed_drop_start = 0
 
@@ -314,29 +329,33 @@ class LogFile(dict):
             return
 
         # If the vehicle ends in autonomous mode, make sure we log the total time
-        if autonomous == True:
+        if autonomous:
             self.auto_time += timestamp - start_auto_time
 
         # If the vehicle ends in armed mode, make sure we log the total time
-        if armed == True:
+        # Combined with desarm detection above
+        if armed:
             self.armed_time += timestamp - start_armed_time
-            self.EndFlight(timestamp - start_armed_time)
-            flying = False
+            if flight.flying:
+                print("Log ended while flying!!!!")
+                flight.Land(timestamp - airspeed_rise_start)
+            self.EndArmed(timestamp - start_armed_time)
             flight = None
+
 
         # Compute the total logtime, checking that timestamps are 2009 or newer for validity
         # (MAVLink didn't exist until 2009)
         if true_time:
-            start_time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(true_time))
-            print("Log started at about {}".format(start_time_str))
+            print("Log started at about " + TimestampString(true_time))
         else:
             print("Warning: No absolute timestamp found in datastream. No starting time can be provided for this log.")
 
         self.total_time = timestamp - self.start_time
 
+
     def PrintSummary(self):
         print
-        print "===========" + self.file_name + "==========="
+        print("===========" + self.file_name + "===========")
         print("Total record count:    " + str(self.record_count))
         print("Total time (mm:ss):    " + MMSSTime(self.total_time))
         # The autonomous time should be good, as a steady HEARTBEAT is required for MAVLink operation
@@ -348,10 +367,11 @@ class LogFile(dict):
         if self.armed_sections > 0:
             print("Armed time (mm:ss):    " + MMSSTime(self.armed_time))
 
-        print("Average airspeed:      " + TwoDec(self.airspeed_cum / self.hud_count))
-        print("Average altitude:      " + TwoDec(self.altitude_cum / self.hud_count))
-        print("Average throttle:      " + TwoDec(self.throttle_cum / self.hud_count))
-       # Print location data
+        if self.hud_count != 0:
+            print("Average airspeed:      " + TwoDec(self.airspeed_cum / self.hud_count))
+            print("Average altitude:      " + TwoDec(self.altitude_cum / self.hud_count))
+            print("Average throttle:      " + TwoDec(self.throttle_cum / self.hud_count))
+        # Print location data
         if self.last_gps_msg is not None:
             first_gps_position = (self.first_gps_msg.lat / 1e7, self.first_gps_msg.lon / 1e7)
             last_gps_position = (self.last_gps_msg.lat / 1e7, self.last_gps_msg.lon / 1e7)
@@ -360,7 +380,8 @@ class LogFile(dict):
         else:
             print("Warning: No GPS data found, can't give position summary.")
 
-        print("Flights: " + str(self.flights))
+        print("Flights: ")
+        pprint.pprint(self.flights)
         print
 
 # End of LogFile class
@@ -369,11 +390,13 @@ logs = {}
 
 for filename in args.logs:
     for f in glob.glob(filename):
-        print("Processing log %s" % filename)
+        print("======== Processing log: " + f + "========")
         log = LogFile(f)
         log.BreakoutLog()
+        print("======== End file ========")
+        print
         logs[f] = log
 
-    for l in logs.values():
-        l.PrintSummary()
+for l in logs.values():
+    l.PrintSummary()
 
