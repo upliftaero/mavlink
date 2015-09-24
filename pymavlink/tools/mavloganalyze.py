@@ -5,7 +5,7 @@ Breakout MAVLink logs by flights etc.
 Based on mavsummarize.py.
 '''
 
-import sys, time, os, glob, pprint
+import sys, time, os, errno, glob, pprint
 #import ../mavparam
 
 # TODO: Looks like the first flight maximums are wrong
@@ -34,6 +34,12 @@ def TwoDec(number):
 def MMSSTime(time):
     return "{:3.0f}:{:02.0f}".format(int(time / 60), time % 60)
 
+def create_path_if_needed(path):
+    try:
+        os.makedirs(path)
+    except OSError as exception:
+        if exception.errno != errno.EEXIST:
+            raise
 
 class Flight(dict):
 
@@ -50,13 +56,13 @@ class Flight(dict):
         self.flight_time = 0.0
         self.flying = False
 
-        self.altitude_cum = 0
+        self.altitude_cum = 0.0
         self.altitude_count = 0
 
-        self.airspeed_cum = 0
+        self.airspeed_cum = 0.0
         self.airspeed_count = 0
 
-        self.throttle_cum = 0
+        self.throttle_cum = 0.0
         self.throttle_count = 0
 
 
@@ -71,15 +77,19 @@ class Flight(dict):
 
     def EndArmed(self, total_time):
         if self.landing_count != 1 or self.takeoff_count != 1:
-            print("Unexpected takeoff/landing count: " + self.takeoff_count + " " + self.landing_count)
-        self['avg_airspeed'] = self.airspeed_cum / self.airspeed_count
-        self['avg_altitude'] = self.altitude_cum / self.altitude_count
-        self['avg_throttle'] = self.throttle_cum / self.throttle_count
+            print("Unexpected takeoff/landing count: " + str(self.takeoff_count) + " / " + str(self.landing_count))
+        if self.airspeed_count != 0:
+            self['avg_airspeed'] = self.airspeed_cum / self.airspeed_count
+        if self.altitude_count != 0:
+            self['avg_altitude'] = self.altitude_cum / self.altitude_count
+        if self.throttle_count != 0:
+            self['avg_throttle'] = self.throttle_cum / self.throttle_count
         self['max_airspeed'] = self.max_airspeed
         self['max_altitude'] = self.max_altitude
         self['takeoff_count'] = self.takeoff_count
         self['landing_count'] = self.landing_count
         self['flight_time'] = self.flight_time
+        self['flight_time_string'] = MMSSTime(self.flight_time)
         self['total_time'] = total_time
         self['mode_changes'] = self.mode_changes
         self['initial_mode'] = self.initial_mode
@@ -88,7 +98,7 @@ class LogFile(dict):
 
     # Variables declared here are CLASS variables
 
-    def __init__(self, filename):
+    def __init__(self, filename, aircraft_type):
         dict.__init__(self)
 
         # This is how instance variables are declared
@@ -130,6 +140,7 @@ class LogFile(dict):
 
         self.last_gps_msg    = None          # The last GPS message received
         self.first_gps_msg   = None          # The first GPS message received
+        self.aircraft_type   = aircraft_type
 
         # Open the log file
         self.mlog = mavutil.mavlink_connection(filename, notimestamps=args.notimestamps, dialect=args.dialect)
@@ -200,7 +211,7 @@ class LogFile(dict):
 
             elif m.get_type() == 'PARAM_VALUE':
                 pname = m.param_id
-                if pname in parameters:
+                if pname in parameters and parameters[pname] != m.param_value:
                     print("Parameter changed in file: " + pname + ": " + str(parameters[pname]) + " to " + str(m.param_value))
                 parameters[pname] = m.param_value
 
@@ -246,8 +257,8 @@ class LogFile(dict):
                             mode_string += "GUIDED "
                         if (m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_AUTO_ENABLED):      # Note - this is never turned on in our logs??
                             mode_string += "AUTO "
-                        print(TimestampString(timestamp) + ": Mode changed to 0x" + format(m.base_mode, '02x') + " " +
-                                    self.mlog.flightmode + " / " + mode_string)     # Need to convert to local time here??
+                        #print(TimestampString(timestamp) + ": Mode changed to 0x" + format(m.base_mode, '02x') + " " +
+                        #            self.mlog.flightmode + " / " + mode_string)     # Need to convert to local time here??
                         if flight is not None and flight.flying:
                             mode_change = {}
                             # Need to use the more decoded modes
@@ -366,7 +377,7 @@ class LogFile(dict):
             if flight.flying:
                 print("Log ended while flying!!!!")
                 flight.Land(timestamp - airspeed_rise_start)
-            self.EndArmed(timestamp - start_armed_time)
+            flight.EndArmed(timestamp - start_armed_time)
             flight = None
 
 
@@ -380,18 +391,32 @@ class LogFile(dict):
         self.total_time = timestamp - self.start_time
         self["parameters"] = parameters
 
+        self['record_count']    = self.record_count
+        self['total_time']      = self.total_time
+        self['autonomous_sections']      = self.autonomous_sections
+        self['autonomous_time'] = self.auto_time
+        self['armed_sections']  = self.armed_sections
+        self['armed_time']      = self.armed_time
+        if "MIXING_GAIN" in self["parameters"]:
+            self['mixing_gain']     = self["parameters"]["MIXING_GAIN"]
+        self['total_diatance']  = self.total_dist
+        self['flights']         = self.flights
+        self['filename']        = self.file_name
+        self['aircraft_type']   = self.aircraft_type
+
 
     def PrintSummary(self):
         print
         print("===========" + self.file_name + "===========")
+        print("Aircraft type:         " + self.aircraft_type)
         print("Total record count:    " + str(self.record_count))
         print("Total time (mm:ss):    " + MMSSTime(self.total_time))
         # The autonomous time should be good, as a steady HEARTBEAT is required for MAVLink operation
         print("Autonomous sections:   {}".format(self.autonomous_sections))
         if self.autonomous_sections > 0:
-            print("Autonomous time (mm:ss):   " + MMSSTime(self.auto_time))
+            print("Autonomous time (mm:ss): " + MMSSTime(self.auto_time))
 
-        print("Armed sections:      {}".format(self.armed_sections))
+        print("Armed sections:        {}".format(self.armed_sections))
         if self.armed_sections > 0:
             print("Armed time (mm:ss):    " + MMSSTime(self.armed_time))
 
@@ -399,12 +424,16 @@ class LogFile(dict):
             print("Average airspeed:      " + TwoDec(self.airspeed_cum / self.hud_count))
             print("Average altitude:      " + TwoDec(self.altitude_cum / self.hud_count))
             print("Average throttle:      " + TwoDec(self.throttle_cum / self.hud_count))
+        if "MIXING_GAIN" in self["parameters"]:
+            print("Mixing gain:           " + str(self["parameters"]["MIXING_GAIN"]))
+        else:
+            print("No MIXING_GAIN")
         # Print location data
         if self.last_gps_msg is not None:
             first_gps_position = (self.first_gps_msg.lat / 1e7, self.first_gps_msg.lon / 1e7)
             last_gps_position = (self.last_gps_msg.lat / 1e7, self.last_gps_msg.lon / 1e7)
             print("Travelled from ({0[0]}, {0[1]}) to ({1[0]}, {1[1]})".format(first_gps_position, last_gps_position))
-            print("Total distance : {:0.2f}m".format(self.total_dist))
+            print("Total distance:        {:0.2f}m".format(self.total_dist))
         else:
             print("Warning: No GPS data found, can't give position summary.")
 
@@ -415,17 +444,53 @@ class LogFile(dict):
 # End of LogFile class
 
 logs = {}
+param_file_dir = "parameter-files/"
 
+create_path_if_needed(param_file_dir)
 for filename in args.logs:
     for f in glob.glob(filename):
+        lower_filename = f.lower()
+        head, tail = os.path.split(lower_filename)
+        aircraft_type = "Unknown"
+        if "waliid" in tail:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
+            aircraft_type = "Waliid"
+        if "bixler" in tail:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
+            aircraft_type = "Bixler"
+        if "fx-61" in tail or "fx61" in tail:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
+            aircraft_type = "FX-61"
         print("======== Processing log: " + f + "========")
-        log = LogFile(f)
+        log = LogFile(f, aircraft_type)
         log.BreakoutLog()
         print("======== End file ========")
         print
         logs[f] = log
 
+        l = log
+
+f = open("log-meta-dict", mode='w')
+pprint.pprint(logs, stream=f)
+
+create_path_if_needed(param_file_dir)
 for l in logs.values():
-    l.PrintSummary()
-    f = open("parameter-files/" + l.file_name, mode='w')
+    head, tail = os.path.split(l.file_name.replace(' ', '-'))
+    create_path_if_needed(param_file_dir + head)
+    print("Tried to create: " + param_file_dir + head)
+    f = open(param_file_dir + head + tail, mode='w')      # Replacement of " " could be destructive
     pprint.pprint(l["parameters"], stream=f)
+    l.PrintSummary()
+
+''' From logbook_generator:
+# This array holds all the .tlog filenames in the current directory
+logfiles = []
+flights = []
+
+# This iterates over the directory recursively to build a list of log files
+current_directory = os.getcwd()
+for (dir, _, files) in os.walk(os.getcwd()):
+    for f in files:
+        path = os.path.join(dir, f)
+        ext = os.path.splitext(path)[1]
+        if ext == ".tlog":
+            logfiles.append(path)
+            print path
+'''
