@@ -5,7 +5,7 @@ Breakout MAVLink logs by flights etc.
 Based on mavsummarize.py.
 '''
 
-import sys, time, os, errno, glob, pprint
+import sys, time, os, errno, glob, pprint, math
 #import ../mavparam
 
 # TODO: Looks like the first flight maximums are wrong
@@ -41,6 +41,45 @@ def create_path_if_needed(path):
         if exception.errno != errno.EEXIST:
             raise
 
+# Represents the statistics of a single data parameters
+#   See: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+#   Extend this to weighted statistics??
+class DataStatistics():         # Should be a dict?
+
+    def __init__(self):     # Have a name?
+        self.n      = 0
+        self.sum    = 0.0
+        self.M2     = 0.0
+        self.min    = None
+        self.max    = None
+        self.mean   = 0.0
+
+    def accumulate(self, value):
+        self.n += 1
+        self.sum += value
+        if self.min is None or value < self.min:
+            self.min = value
+        if max is None or value > self.max:
+            self.max = value
+        delta = value - self.mean
+        self.mean = self.mean + delta/self.n
+        self.M2 = self.M2 + delta*(value - self.mean)
+
+
+    def get_stats(self):
+        stats = {}
+        variance = self.M2 / (self.n - 1)    # Not if n < 2!!
+        stats["min"]        = self.min
+        stats["max"]        = self.max
+        stats["mean"]       = self.mean
+        if self.n != 0:
+            stats["other_mean"] = self.sum / self.n
+        stats["count"]      = self.n
+        stats["variance"]   = variance
+        stats["stdev"]      = math.sqrt(variance)
+        return stats
+
+
 class Flight(dict):
 
     def __init__(self, logfile, flight_number):
@@ -64,6 +103,8 @@ class Flight(dict):
 
         self.throttle_cum = 0.0
         self.throttle_count = 0
+
+        self.alt_stats = DataStatistics();
 
 
     def Takeoff(self):      # May not have been an actual detected landing - add a reason code??
@@ -93,6 +134,7 @@ class Flight(dict):
         self['total_time'] = total_time
         self['mode_changes'] = self.mode_changes
         self['initial_mode'] = self.initial_mode
+        self['alt_stats'] = self.alt_stats.get_stats()
 
 class LogFile(dict):
 
@@ -283,7 +325,7 @@ class LogFile(dict):
                     flight.airspeed_count += 1
                     flight.throttle_count += 1
                     flight.altitude_count += 1
-
+                    flight.alt_stats.accumulate(m.alt)
 
                 self.hud_records.append(m)
 
@@ -345,7 +387,7 @@ class LogFile(dict):
                             airspeed_rise_start = timestamp
                         elif (timestamp - airspeed_rise_start) > TAKEOFF_LAND_DETECTION_HYSTERESIS:
                             print("Takeoff!! at: " + TimestampString(airspeed_rise_start))
-                            print("Detection delta t: " + MMSSTime(timestamp - airspeed_rise_start))
+                            #print("Detection delta t: " + MMSSTime(timestamp - airspeed_rise_start))
                             flight.Takeoff()
                     else:
                         airspeed_rise_start = 0
@@ -450,13 +492,12 @@ create_path_if_needed(param_file_dir)
 for filename in args.logs:
     for f in glob.glob(filename):
         lower_filename = f.lower()
-        head, tail = os.path.split(lower_filename)
         aircraft_type = "Unknown"
-        if "waliid" in tail:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
+        if "waliid" in lower_filename:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
             aircraft_type = "Waliid"
-        if "bixler" in tail:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
+        if "bixler" in lower_filename:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
             aircraft_type = "Bixler"
-        if "fx-61" in tail or "fx61" in tail:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
+        if "fx-61" in lower_filename or "fx61" in lower_filename:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
             aircraft_type = "FX-61"
         print("======== Processing log: " + f + "========")
         log = LogFile(f, aircraft_type)
@@ -465,19 +506,16 @@ for filename in args.logs:
         print
         logs[f] = log
 
-        l = log
+        # Write the parameter fie and print the summary
+        pfile_path = f.replace(" ", "-")
+        head, tail = os.path.split(pfile_path)
+        create_path_if_needed(param_file_dir + head)
+        f = open(param_file_dir + pfile_path, mode='w')      # Would like to replace " " with "-"
+        pprint.pprint(log["parameters"], stream=f)
+        log.PrintSummary()
 
 f = open("log-meta-dict", mode='w')
 pprint.pprint(logs, stream=f)
-
-create_path_if_needed(param_file_dir)
-for l in logs.values():
-    head, tail = os.path.split(l.file_name.replace(' ', '-'))
-    create_path_if_needed(param_file_dir + head)
-    print("Tried to create: " + param_file_dir + head)
-    f = open(param_file_dir + head + tail, mode='w')      # Replacement of " " could be destructive
-    pprint.pprint(l["parameters"], stream=f)
-    l.PrintSummary()
 
 ''' From logbook_generator:
 # This array holds all the .tlog filenames in the current directory
