@@ -6,6 +6,7 @@ Based on mavsummarize.py.
 '''
 
 import sys, time, os, errno, glob, pprint, math
+import log_meta_keys as keys
 #import ../mavparam
 
 # TODO: Looks like the first flight maximums are wrong
@@ -15,7 +16,9 @@ parser = ArgumentParser(description=__doc__)
 parser.add_argument("--no-timestamps", dest="notimestamps", action='store_true', help="Log doesn't have timestamps")
 parser.add_argument("--condition", default=None, help="condition for packets")
 parser.add_argument("--dialect", default="ardupilotmega", help="MAVLink dialect")
-parser.add_argument("logs", metavar="LOG", nargs="+")
+parser.add_argument("logs", metavar="LOG", nargs="+", help="Log files to convert")
+
+# TODO: Do we use all of these arguments?
 
 args = parser.parse_args()
 
@@ -68,15 +71,16 @@ class DataStatistics():         # Should be a dict?
 
     def get_stats(self):
         stats = {}
-        variance = self.M2 / (self.n - 1)    # Not if n < 2!!
-        stats["min"]        = self.min
-        stats["max"]        = self.max
-        stats["mean"]       = self.mean
+        if self.n > 1:
+            variance = self.M2 / (self.n - 1)
+            stats[keys.STATS_VARIANCE]   = variance
+            stats[keys.STATS_STDEV]      = math.sqrt(variance)
+        stats[keys.STATS_MIN]        = self.min
+        stats[keys.STATS_MAX]        = self.max
+        stats[keys.STATS_MEAN]       = self.mean
         if self.n != 0:
             stats["other_mean"] = self.sum / self.n
-        stats["count"]      = self.n
-        stats["variance"]   = variance
-        stats["stdev"]      = math.sqrt(variance)
+        stats[keys.STATS_COUNT]      = self.n
         return stats
 
 
@@ -84,10 +88,8 @@ class Flight(dict):
 
     def __init__(self, logfile, flight_number):
         dict.__init__(self)
-        self['file_name'] = logfile
-        self['flight_number'] = flight_number
-        self.max_altitude = 0.0     # Accessed by LogFile
-        self.max_airspeed = 0.0
+        #self['file_name'] = logfile
+        self[keys.FLIGHT_FLIGHT_NUMBER] = flight_number
         self.takeoff_count = 0
         self.landing_count = 0
         self.initial_mode = ""
@@ -95,16 +97,11 @@ class Flight(dict):
         self.flight_time = 0.0
         self.flying = False
 
-        self.altitude_cum = 0.0
-        self.altitude_count = 0
-
-        self.airspeed_cum = 0.0
-        self.airspeed_count = 0
-
-        self.throttle_cum = 0.0
-        self.throttle_count = 0
-
-        self.alt_stats = DataStatistics();
+        self.altitude_stats = DataStatistics();
+        self.airspeed_stats = DataStatistics();
+        self.throttle_stats = DataStatistics();
+        self.elevator_stats = DataStatistics();
+        self.aileron_stats = DataStatistics();
 
 
     def Takeoff(self):      # May not have been an actual detected landing - add a reason code??
@@ -119,22 +116,18 @@ class Flight(dict):
     def EndArmed(self, total_time):
         if self.landing_count != 1 or self.takeoff_count != 1:
             print("Unexpected takeoff/landing count: " + str(self.takeoff_count) + " / " + str(self.landing_count))
-        if self.airspeed_count != 0:
-            self['avg_airspeed'] = self.airspeed_cum / self.airspeed_count
-        if self.altitude_count != 0:
-            self['avg_altitude'] = self.altitude_cum / self.altitude_count
-        if self.throttle_count != 0:
-            self['avg_throttle'] = self.throttle_cum / self.throttle_count
-        self['max_airspeed'] = self.max_airspeed
-        self['max_altitude'] = self.max_altitude
-        self['takeoff_count'] = self.takeoff_count
-        self['landing_count'] = self.landing_count
-        self['flight_time'] = self.flight_time
-        self['flight_time_string'] = MMSSTime(self.flight_time)
-        self['total_time'] = total_time
-        self['mode_changes'] = self.mode_changes
-        self['initial_mode'] = self.initial_mode
-        self['alt_stats'] = self.alt_stats.get_stats()
+        self[keys.FLIGHT_TAKEOFF_COUNT]      = self.takeoff_count
+        self[keys.FLIGHT_LANDING_COUNT]      = self.landing_count
+        self[keys.FLIGHT_FLIGHT_TIME]        = self.flight_time
+        self[keys.FLIGHT_FLIGHT_TIME_STRING] = MMSSTime(self.flight_time)
+        self[keys.FLIGHT_TOTAL_TIME]         = total_time
+        self[keys.FLIGHT_MODE_CHANGES]       = self.mode_changes
+        self[keys.FLIGHT_INITIAL_MODE]       = self.initial_mode
+        self[keys.FLIGHT_ALTITUDE_STATS]     = self.altitude_stats.get_stats()
+        self[keys.FLIGHT_AIRSPEED_STATS]     = self.airspeed_stats.get_stats()
+        self[keys.FLIGHT_THROTTLE_STATS]     = self.throttle_stats.get_stats()
+        self[keys.FLIGHT_ELEVATOR_STATS]     = self.elevator_stats.get_stats()
+        self[keys.FLIGHT_AILERON_STATS]      = self.aileron_stats.get_stats()
 
 class LogFile(dict):
 
@@ -166,14 +159,6 @@ class LogFile(dict):
         self.altitude_deltas = []
         self.altitude_last = 0
         self.altitude_window = 0
-        self.altitude_cum = 0
-
-        self.airspeed_last = None
-        self.airspeed_cum = 0
-        self.airspeed_count = 0
-
-        self.throttle_cum = 0
-        self.throttle_count = 0
 
         self.total_time = 0
         self.record_count = 0;
@@ -187,8 +172,7 @@ class LogFile(dict):
         # Open the log file
         self.mlog = mavutil.mavlink_connection(filename, notimestamps=args.notimestamps, dialect=args.dialect)
 
-    def BreakoutLog(self):
-        '''Calculate some interesting datapoints of the file'''
+    def AnalyzeLog(self):
 
         autonomous      = False         # Whether the vehicle is currently autonomous at this point in the logfile
         armed           = False         # Whether the vehicle is currently armed at this point in the logfile
@@ -304,35 +288,31 @@ class LogFile(dict):
                         if flight is not None and flight.flying:
                             mode_change = {}
                             # Need to use the more decoded modes
-                            mode_change['time'] = timestamp
-                            mode_change['old_mode'] = current_mode
-                            mode_change['new_mode'] = m.base_mode
-                            mode_change['mode_name'] = self.mlog.flightmode
+                            mode_change[keys.MODE_CHANGE_TIME] = timestamp
+                            mode_change[keys.MODE_CHANGE_OLD_MODE] = current_mode
+                            mode_change[keys.MODE_CHANGE_NEW_MODE] = m.base_mode
+                            mode_change[keys.MODE_CHANGE_MODE_NAME] = self.mlog.flightmode
                             flight.mode_changes.append(mode_change)
                         current_mode = m.base_mode
+
+
+            elif m.get_type() == 'SERVO_OUTPUT_RAW' and armed and flight.flying:
+                flight.elevator_stats.accumulate(m.servo2_raw)
+                flight.aileron_stats.accumulate(m.servo4_raw)
 
 
             elif m.get_type() == 'VFR_HUD' and armed:
                 if flight.flying:
                     # Accumulate flight statistics
-                    if m.airspeed > flight.max_airspeed:
-                        flight.max_airspeed = m.airspeed
-                    if m.alt > flight.max_altitude:
-                        flight.max_altitude = m.alt
-                    flight.altitude_cum += m.alt
-                    flight.airspeed_cum += m.airspeed
-                    flight.throttle_cum += m.throttle
-                    flight.airspeed_count += 1
-                    flight.throttle_count += 1
-                    flight.altitude_count += 1
-                    flight.alt_stats.accumulate(m.alt)
+                    flight.altitude_stats.accumulate(m.alt)
+                    flight.airspeed_stats.accumulate(m.airspeed)
+                    flight.throttle_stats.accumulate(m.throttle)
 
                 self.hud_records.append(m)
 
                 # Vertical speed detection logic
                 delta = (m.alt - self.altitude_last) if self.hud_count != 0 else 0
                 self.altitude_deltas.append(delta)
-                self.altitude_cum += m.alt
                 self.altitude_window += delta           # Window should really be time based!!
                 self.hud_count += 1
                 altitude_last = m.alt
@@ -375,12 +355,6 @@ class LogFile(dict):
                     #print(TimestampString(timestamp) + ": VSI " + ("Levelout" if new_vsi_state == 0 else "Climb" if new_vsi_state == 1 else "Descent") + " started " + TwoDec(m.alt) + " " + TwoDec(m.climb))
                     vsi_state = new_vsi_state
 
-                self.airspeed_last = m.airspeed
-                self.airspeed_cum += m.airspeed
-                self.airspeed_count += 1
-
-                self.throttle_cum += m.throttle
-                self.throttle_count += 1
                 if not flight.flying:
                     if m.airspeed > TAKEOFF_AIRSPEED:
                         if airspeed_rise_start == 0:
@@ -431,20 +405,20 @@ class LogFile(dict):
             print("Warning: No absolute timestamp found in datastream. No starting time can be provided for this log.")
 
         self.total_time = timestamp - self.start_time
-        self["parameters"] = parameters
+        self[keys.LOG_PARAMETERS] = parameters
 
-        self['record_count']    = self.record_count
-        self['total_time']      = self.total_time
-        self['autonomous_sections']      = self.autonomous_sections
-        self['autonomous_time'] = self.auto_time
-        self['armed_sections']  = self.armed_sections
-        self['armed_time']      = self.armed_time
-        if "MIXING_GAIN" in self["parameters"]:
-            self['mixing_gain']     = self["parameters"]["MIXING_GAIN"]
-        self['total_diatance']  = self.total_dist
-        self['flights']         = self.flights
-        self['filename']        = self.file_name
-        self['aircraft_type']   = self.aircraft_type
+        self[keys.LOG_RECORD_COUNT]    = self.record_count
+        self[keys.LOG_TOTAL_TIME]      = self.total_time
+        self[keys.LOG_AUTONOMOUS_SECTIONS]      = self.autonomous_sections
+        self[keys.LOG_AUTONOMOUS_TIME] = self.auto_time
+        self[keys.LOG_ARMED_SECTIONS]  = self.armed_sections
+        self[keys.LOG_ARMED_TIME]      = self.armed_time
+        if "MIXING_GAIN" in self[keys.LOG_PARAMETERS]:
+            self[keys.LOG_MIXING_GAIN]     = self[keys.LOG_PARAMETERS]["MIXING_GAIN"]
+        self[keys.LOG_TOTAL_DISTANCE]  = self.total_dist
+        self[keys.LOG_FLIGHTS]         = self.flights
+        self[keys.LOG_FILENAME]        = self.file_name
+        self[keys.LOG_AIRCRAFT_TYPE]   = self.aircraft_type
 
 
     def PrintSummary(self):
@@ -462,10 +436,6 @@ class LogFile(dict):
         if self.armed_sections > 0:
             print("Armed time (mm:ss):    " + MMSSTime(self.armed_time))
 
-        if self.hud_count != 0:
-            print("Average airspeed:      " + TwoDec(self.airspeed_cum / self.hud_count))
-            print("Average altitude:      " + TwoDec(self.altitude_cum / self.hud_count))
-            print("Average throttle:      " + TwoDec(self.throttle_cum / self.hud_count))
         if "MIXING_GAIN" in self["parameters"]:
             print("Mixing gain:           " + str(self["parameters"]["MIXING_GAIN"]))
         else:
@@ -501,7 +471,7 @@ for filename in args.logs:
             aircraft_type = "FX-61"
         print("======== Processing log: " + f + "========")
         log = LogFile(f, aircraft_type)
-        log.BreakoutLog()
+        log.AnalyzeLog()
         print("======== End file ========")
         print
         logs[f] = log
@@ -511,7 +481,7 @@ for filename in args.logs:
         head, tail = os.path.split(pfile_path)
         create_path_if_needed(param_file_dir + head)
         f = open(param_file_dir + pfile_path, mode='w')      # Would like to replace " " with "-"
-        pprint.pprint(log["parameters"], stream=f)
+        pprint.pprint(log[keys.LOG_PARAMETERS], stream=f)
         log.PrintSummary()
 
 f = open("log-meta-dict", mode='w')
