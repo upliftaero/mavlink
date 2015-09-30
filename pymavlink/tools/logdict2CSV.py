@@ -46,20 +46,22 @@ for log in log_meta_data.values():
         csv_dict["log auto time"] = log[keys.LOG_AUTONOMOUS_TIME]
         csv_dict["log armed sections"] = log[keys.LOG_ARMED_SECTIONS]
         csv_dict["log armed time"] = log[keys.LOG_ARMED_TIME]
-        # csv_dict["log total distance"] = log[keys.LOG_TOTAL_DISTANCE]  # Hack to workaround a bug...
-        csv_dict["log total distance"] = log['total_diatance']
+        csv_dict["log total distance"] = log[keys.LOG_TOTAL_DISTANCE]
+        #csv_dict["log total distance"] = log['total_diatance']  # Hack to workaround a (fixed) bug...
         csv_dict["mixing gain"] = log[keys.LOG_MIXING_GAIN]
 
-        csv_dict["flight number"] = flight[keys.FLIGHT_FLIGHT_NUMBER]
-        csv_dict["flight takeoffs"] = flight[keys.FLIGHT_TAKEOFF_COUNT]
-        csv_dict["flight landings"] = flight[keys.FLIGHT_LANDING_COUNT]
-        csv_dict["flight time"] = flight[keys.FLIGHT_FLIGHT_TIME_STRING]
+        csv_dict["flight number"]       = flight[keys.FLIGHT_FLIGHT_NUMBER]
+        csv_dict["flight takeoffs"]     = flight[keys.FLIGHT_TAKEOFF_COUNT]
+        csv_dict["flight landings"]     = flight[keys.FLIGHT_LANDING_COUNT]
+        csv_dict["flight time"]         = flight[keys.FLIGHT_FLIGHT_TIME_STR]
+        csv_dict["start_time"]          = flight[keys.FLIGHT_START_TIME_STR]
+        csv_dict["end_time"]            = flight[keys.FLIGHT_END_TIME_STR]
         csv_dict["flight initial mode"] = flight[keys.FLIGHT_INITIAL_MODE]
         add_stats(csv_dict, "altitude", flight[keys.FLIGHT_ALTITUDE_STATS])
-        add_stats(csv_dict, "airspeed", flight[keys.FLIGHT_ALTITUDE_STATS])
-        add_stats(csv_dict, "throttle", flight[keys.FLIGHT_ALTITUDE_STATS])
-        add_stats(csv_dict, "elevator deflection", flight[keys.FLIGHT_ALTITUDE_STATS])
-        add_stats(csv_dict, "aileron deflection", flight[keys.FLIGHT_ALTITUDE_STATS])
+        add_stats(csv_dict, "airspeed", flight[keys.FLIGHT_AIRSPEED_STATS])
+        add_stats(csv_dict, "throttle", flight[keys.FLIGHT_THROTTLE_STATS])
+        add_stats(csv_dict, "elevator deflection", flight[keys.FLIGHT_ELEVATOR_STATS])
+        add_stats(csv_dict, "aileron deflection", flight[keys.FLIGHT_AILERON_STATS])
 
         log_list.append(csv_dict)
 

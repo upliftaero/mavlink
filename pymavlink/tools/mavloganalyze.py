@@ -96,6 +96,8 @@ class Flight(dict):
         self.mode_changes = []
         self.flight_time = 0.0
         self.flying = False
+        self.last_takeoff_time = 0.0
+        self.last_landing_time = 0.0
 
         self.altitude_stats = DataStatistics();
         self.airspeed_stats = DataStatistics();
@@ -104,30 +106,36 @@ class Flight(dict):
         self.aileron_stats = DataStatistics();
 
 
-    def Takeoff(self):      # May not have been an actual detected landing - add a reason code??
+    def Takeoff(self, time):      # May not have been an actual detected landing - add a reason code??
         self.flying = True
         self.takeoff_count += 1
+        self.last_takeoff_time = time
 
-    def Land(self, flight_time):      # May not have been an actual detected landing - add a reason code??
-        self.flight_time += flight_time
+    def Land(self, time):      # May not have been an actual detected landing - add a reason code??
+        self.last_landing_time = time
+        self.flight_time += (self.last_landing_time - self.last_takeoff_time)
         self.flying = False
         self.landing_count += 1
 
     def EndArmed(self, total_time):
         if self.landing_count != 1 or self.takeoff_count != 1:
             print("Unexpected takeoff/landing count: " + str(self.takeoff_count) + " / " + str(self.landing_count))
-        self[keys.FLIGHT_TAKEOFF_COUNT]      = self.takeoff_count
-        self[keys.FLIGHT_LANDING_COUNT]      = self.landing_count
-        self[keys.FLIGHT_FLIGHT_TIME]        = self.flight_time
-        self[keys.FLIGHT_FLIGHT_TIME_STRING] = MMSSTime(self.flight_time)
-        self[keys.FLIGHT_TOTAL_TIME]         = total_time
-        self[keys.FLIGHT_MODE_CHANGES]       = self.mode_changes
-        self[keys.FLIGHT_INITIAL_MODE]       = self.initial_mode
-        self[keys.FLIGHT_ALTITUDE_STATS]     = self.altitude_stats.get_stats()
-        self[keys.FLIGHT_AIRSPEED_STATS]     = self.airspeed_stats.get_stats()
-        self[keys.FLIGHT_THROTTLE_STATS]     = self.throttle_stats.get_stats()
-        self[keys.FLIGHT_ELEVATOR_STATS]     = self.elevator_stats.get_stats()
-        self[keys.FLIGHT_AILERON_STATS]      = self.aileron_stats.get_stats()
+        self[keys.FLIGHT_TAKEOFF_COUNT]     = self.takeoff_count
+        self[keys.FLIGHT_LANDING_COUNT]     = self.landing_count
+        self[keys.FLIGHT_FLIGHT_TIME]       = self.flight_time
+        self[keys.FLIGHT_FLIGHT_TIME_STR]   = MMSSTime(self.flight_time)
+        self[keys.FLIGHT_START_TIME]        = self.last_takeoff_time
+        self[keys.FLIGHT_START_TIME_STR]    = TimestampString(self.last_takeoff_time)
+        self[keys.FLIGHT_END_TIME]          = self.last_landing_time
+        self[keys.FLIGHT_END_TIME_STR]      = TimestampString(self.last_landing_time)
+        self[keys.FLIGHT_TOTAL_TIME]        = total_time
+        self[keys.FLIGHT_MODE_CHANGES]      = self.mode_changes
+        self[keys.FLIGHT_INITIAL_MODE]      = self.initial_mode
+        self[keys.FLIGHT_ALTITUDE_STATS]    = self.altitude_stats.get_stats()
+        self[keys.FLIGHT_AIRSPEED_STATS]    = self.airspeed_stats.get_stats()
+        self[keys.FLIGHT_THROTTLE_STATS]    = self.throttle_stats.get_stats()
+        self[keys.FLIGHT_ELEVATOR_STATS]    = self.elevator_stats.get_stats()
+        self[keys.FLIGHT_AILERON_STATS]     = self.aileron_stats.get_stats()
 
 class LogFile(dict):
 
@@ -209,11 +217,11 @@ class LogFile(dict):
             # we try to find a message that outputs a Unix time-since-epoch.
             if self.true_time is None:
                 if not args.notimestamps and timestamp >= 1230768000:
-                    true_time = timestamp
+                    self.true_time = timestamp
                 elif 'time_unix_usec' in m.__dict__ and m.time_unix_usec >= 1230768000:
-                    true_time = m.time_unix_usec * 1.0e-6
+                    self.true_time = m.time_unix_usec * 1.0e-6
                 elif 'time_usec' in m.__dict__ and m.time_usec >= 1230768000:
-                    true_time = m.time_usec * 1.0e-6
+                    self.true_time = m.time_usec * 1.0e-6
 
             # Track the vehicle's speed and status
             if m.get_type() == 'GPS_RAW_INT':
@@ -361,8 +369,7 @@ class LogFile(dict):
                             airspeed_rise_start = timestamp
                         elif (timestamp - airspeed_rise_start) > TAKEOFF_LAND_DETECTION_HYSTERESIS:
                             print("Takeoff!! at: " + TimestampString(airspeed_rise_start))
-                            #print("Detection delta t: " + MMSSTime(timestamp - airspeed_rise_start))
-                            flight.Takeoff()
+                            flight.Takeoff(airspeed_rise_start)
                     else:
                         airspeed_rise_start = 0
                 else:
@@ -371,7 +378,7 @@ class LogFile(dict):
                             airspeed_drop_start = timestamp
                         elif (timestamp - airspeed_drop_start) > TAKEOFF_LAND_DETECTION_HYSTERESIS:
                             print("Landing!! at: " + TimestampString(timestamp))
-                            flight.Land(timestamp - airspeed_rise_start)
+                            flight.Land(timestamp)
                     else:
                         airspeed_drop_start = 0
 
@@ -392,15 +399,15 @@ class LogFile(dict):
             self.armed_time += timestamp - start_armed_time
             if flight.flying:
                 print("Log ended while flying!!!!")
-                flight.Land(timestamp - airspeed_rise_start)
+                flight.Land(timestamp)
             flight.EndArmed(timestamp - start_armed_time)
             flight = None
 
 
         # Compute the total logtime, checking that timestamps are 2009 or newer for validity
         # (MAVLink didn't exist until 2009)
-        if true_time:
-            print("Log started at about " + TimestampString(true_time))
+        if self.true_time:
+            print("Log started at about " + TimestampString(self.true_time))
         else:
             print("Warning: No absolute timestamp found in datastream. No starting time can be provided for this log.")
 
