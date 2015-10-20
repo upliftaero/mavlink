@@ -22,6 +22,8 @@ FLIGHT_START_TIME       = 'start_time'
 FLIGHT_START_TIME_STR   = 'start_time_string'
 FLIGHT_END_TIME         = 'end_time'
 FLIGHT_END_TIME_STR     = 'end_time_str'
+# For debugging
+FLIGHT_VFR_HUD_RECORD_RATE     = 'vfr_hud_record_rate'
 
 MODE_CHANGE_TIME =			'time'
 MODE_CHANGE_OLD_MODE =      'old_mode'
@@ -41,3 +43,4 @@ LOG_TOTAL_DISTANCE =        'total_distance'
 LOG_FLIGHTS =               'flights'
 LOG_FILENAME =              'filename'
 LOG_AIRCRAFT_TYPE =         'aircraft_type'
+LOG_SYSID =                 'system_id'

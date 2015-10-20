@@ -6,10 +6,15 @@ Based on mavsummarize.py.
 '''
 
 import sys, time, os, errno, glob, pprint, math
+import csv
+from collections import deque
+
 import log_meta_keys as keys
+
 #import ../mavparam
 
 # TODO: Looks like the first flight maximums are wrong
+#   Tridge uses GPS altitude??
 
 from argparse import ArgumentParser
 parser = ArgumentParser(description=__doc__)
@@ -28,9 +33,10 @@ from pymavlink.mavextra import distance_two
 TAKEOFF_AIRSPEED = 4.0      # meters / second
 TAKEOFF_LAND_DETECTION_HYSTERESIS = 5.0     # seconds
 SMOOTHING_WEIGHT = 0.97
+ALT_STACK_DEPTH = 5
 
 def TimestampString(timestamp):
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+    return time.strftime("%Y-%m-%d %H:%M:%S.", time.localtime(timestamp))
 
 def TwoDec(number):
     return "{:.2f}".format(number)
@@ -44,6 +50,12 @@ def create_path_if_needed(path):
     except OSError as exception:
         if exception.errno != errno.EEXIST:
             raise
+
+#class FlightState(Enum):   # Python 3 only
+FS_GROUND      = 0
+FS_CLIMB       = 1
+FS_LEVEL       = 2
+FS_DESCENT     = 3
 
 # Represents the statistics of a single data parameters
 #   See: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
@@ -104,12 +116,16 @@ class Flight(dict):
         self.flying = False
         self.last_takeoff_time = 0.0
         self.last_landing_time = 0.0
+        self.flight_state = FS_GROUND
 
         self.altitude_stats = DataStatistics();
         self.airspeed_stats = DataStatistics();
         self.throttle_stats = DataStatistics();
+        self.climb_stats    = DataStatistics();
         self.elevator_stats = DataStatistics();
-        self.aileron_stats = DataStatistics();
+        self.aileron_stats  = DataStatistics();
+        self.gps_altitude_stats  = DataStatistics();
+        self.vfr_hud_record_rate  = DataStatistics();
 
 
     def Takeoff(self, time):      # May not have been an actual detected landing - add a reason code??
@@ -142,6 +158,7 @@ class Flight(dict):
         self[keys.FLIGHT_THROTTLE_STATS]    = self.throttle_stats.get_stats()
         self[keys.FLIGHT_ELEVATOR_STATS]    = self.elevator_stats.get_stats()
         self[keys.FLIGHT_AILERON_STATS]     = self.aileron_stats.get_stats()
+        self[keys.FLIGHT_VFR_HUD_RECORD_RATE] = self.vfr_hud_record_rate.get_stats()
 
 class LogFile(dict):
 
@@ -153,6 +170,7 @@ class LogFile(dict):
         # This is how instance variables are declared
         # Not all of these need to be intance variables
         self.flights = []
+        self.flights_data = []  # This is an array of arrays or numerical flight data.  Currently only used for diagnostic purposes
 
         self.file_name = filename
 
@@ -197,7 +215,12 @@ class LogFile(dict):
         start_auto_time = 0
         airspeed_rise_start = 0
         airspeed_drop_start = 0
-        parameters      = {}  # Ultimately: MAVParmDict()
+        parameters      = {}  # TODO: Ultimately: MAVParmDict()
+        flight_data     = None
+        last_gps_raw_alt = None
+        last_timestamp  = 0.0
+        last_second_timestamp  = 0.0
+        altitude_samples = deque([], maxlen = ALT_STACK_DEPTH)
 
         while True:
             m = self.mlog.recv_match(condition=args.condition)
@@ -212,6 +235,7 @@ class LogFile(dict):
                 continue
 
             # Keep track of the latest timestamp for various calculations
+            # timestamp is a float with units of seconds
             timestamp = getattr(m, '_timestamp', 0.0)
 
             # Log the first message time
@@ -230,7 +254,7 @@ class LogFile(dict):
                     self.true_time = m.time_usec * 1.0e-6
 
             # Track the vehicle's speed and status
-            if m.get_type() == 'GPS_RAW_INT':
+            if m.get_type() == 'GPS_RAW_INT':       # Why are we using RAW_INT here?  And not GLOBAL_POSITION_INT
 
                 # Ignore GPS messages without a proper fix
                 if m.fix_type < 3 or m.lat == 0 or m.lon == 0:
@@ -315,13 +339,42 @@ class LogFile(dict):
                 flight.aileron_stats.accumulate(m.servo4_raw)
 
 
+            elif m.get_type() == 'GLOBAL_POSITION_INT' and armed:
+                if flight.flying:
+                    flight.gps_altitude_stats.accumulate(m.relative_alt)
+                    last_gps_raw_alt = m.relative_alt
+
             elif m.get_type() == 'VFR_HUD' and armed:
                 if flight.flying:
                     # Accumulate flight statistics
                     flight.altitude_stats.accumulate(m.alt)
                     flight.airspeed_stats.accumulate(m.airspeed)
                     flight.throttle_stats.accumulate(m.throttle)
-                    print str(m.alt) + ", " + str(flight.altitude_stats.smoothed)
+                    flight.climb_stats.accumulate(m.climb)
+                    # should be here only for diagnostics
+                    if last_timestamp != 0.0:
+                        flight.vfr_hud_record_rate.accumulate(timestamp - last_timestamp)
+                    last_timestamp = timestamp
+                    if last_gps_raw_alt is not None:
+                        flight_data.append([timestamp, m.alt, flight.altitude_stats.smoothed, m.airspeed, flight.airspeed_stats.smoothed,
+                                            m.climb, flight.climb_stats.smoothed, m.throttle, flight.throttle_stats.smoothed,
+                                            last_gps_raw_alt / 1000.0, flight.gps_altitude_stats.smoothed / 1000.0])
+
+                if timestamp - last_second_timestamp > 1.0 and flight.altitude_stats.smoothed is not None:  # These initialization checks are expensive
+                    altitude_samples.append(flight.altitude_stats.smoothed)
+                    last_second_timestamp = timestamp
+                    if len(altitude_samples) == ALT_STACK_DEPTH:
+                        delta = altitude_samples[0] - altitude_samples[ALT_STACK_DEPTH - 1]
+                        last_flight_state = flight.flight_state
+                        if delta > 6.0:       # Make this a constant
+                            flight.flight_state = FS_CLIMB
+                        elif delta < -6.0:
+                            flight.flight_state = FS_DESCENT
+                        else:
+                            flight.flight_state = FS_LEVEL
+                        if last_flight_state != flight.flight_state:
+                            print("Flight state transition @ " + TimestampString(timestamp) + ": " + str(last_flight_state) + " to " + str(flight.flight_state) + ": " + str(delta))
+
 
                 self.hud_records.append(m)
 
@@ -370,6 +423,7 @@ class LogFile(dict):
                     #print(TimestampString(timestamp) + ": VSI " + ("Levelout" if new_vsi_state == 0 else "Climb" if new_vsi_state == 1 else "Descent") + " started " + TwoDec(m.alt) + " " + TwoDec(m.climb))
                     vsi_state = new_vsi_state
 
+                # Takeoff and landing detection logic
                 if not flight.flying:
                     if m.airspeed > TAKEOFF_AIRSPEED:
                         if airspeed_rise_start == 0:
@@ -377,6 +431,9 @@ class LogFile(dict):
                         elif (timestamp - airspeed_rise_start) > TAKEOFF_LAND_DETECTION_HYSTERESIS:
                             print("Takeoff!! at: " + TimestampString(airspeed_rise_start))
                             flight.Takeoff(airspeed_rise_start)
+                            # Setup flight data collection for diagnostic purpose.  Kind of a hack for now....
+                            flight_data = []
+                            self.flights_data.append(flight_data)
                     else:
                         airspeed_rise_start = 0
                 else:
@@ -386,6 +443,8 @@ class LogFile(dict):
                         elif (timestamp - airspeed_drop_start) > TAKEOFF_LAND_DETECTION_HYSTERESIS:
                             print("Landing!! at: " + TimestampString(timestamp))
                             flight.Land(timestamp)
+                            flight_data = None  # Hacky!!
+                            last_gps_raw_alt = None  # Hacky!!
                     else:
                         airspeed_drop_start = 0
 
@@ -407,6 +466,8 @@ class LogFile(dict):
             if flight.flying:
                 print("Log ended while flying!!!!")
                 flight.Land(timestamp)
+                flight_data = None
+                last_gps_raw_alt = None
             flight.EndArmed(timestamp - start_armed_time)
             flight = None
 
@@ -428,7 +489,9 @@ class LogFile(dict):
         self[keys.LOG_ARMED_SECTIONS]  = self.armed_sections
         self[keys.LOG_ARMED_TIME]      = self.armed_time
         if "MIXING_GAIN" in self[keys.LOG_PARAMETERS]:
-            self[keys.LOG_MIXING_GAIN]     = self[keys.LOG_PARAMETERS]["MIXING_GAIN"]
+            self[keys.LOG_MIXING_GAIN] = self[keys.LOG_PARAMETERS]["MIXING_GAIN"]
+        if "SYSID_THISMAV" in self[keys.LOG_PARAMETERS]:
+            self[keys.LOG_SYSID]       = self[keys.LOG_PARAMETERS]["SYSID_THISMAV"]
         self[keys.LOG_TOTAL_DISTANCE]  = self.total_dist
         self[keys.LOG_FLIGHTS]         = self.flights
         self[keys.LOG_FILENAME]        = self.file_name
@@ -471,10 +534,14 @@ class LogFile(dict):
 
 logs = {}
 param_file_dir = "parameter-files/"
+csv_file_dir = "csv-files/"
 
 create_path_if_needed(param_file_dir)
+create_path_if_needed(csv_file_dir)
+
 for filename in args.logs:
     for f in glob.glob(filename):
+        print ("File name: " + f)
         lower_filename = f.lower()
         aircraft_type = "Unknown"
         if "waliid" in lower_filename:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
@@ -490,16 +557,35 @@ for filename in args.logs:
         print
         logs[f] = log
 
-        # Write the parameter fie and print the summary
+        # Note / TODO: The path creation has really only been tested for command line arguments of the form .../*/*.tlog
         pfile_path = f.replace(" ", "-")
         head, tail = os.path.split(pfile_path)
-        create_path_if_needed(param_file_dir + head)
-        f = open(param_file_dir + pfile_path, mode='w')      # Would like to replace " " with "-"
-        pprint.pprint(log[keys.LOG_PARAMETERS], stream=f)
+        head_base = os.path.basename(head)  # In case the file reference is absolute - don't create super deep directory structures
+
+        # Write the parameter file
+        create_path_if_needed(param_file_dir + head_base)
+        with open(os.path.join(param_file_dir, head_base, tail + ".param"), mode='w') as f:
+            pprint.pprint(log[keys.LOG_PARAMETERS], stream=f)
+
+        # Write the data file(s)
+        create_path_if_needed(csv_file_dir + head_base)
+        i = 1
+        for data in log.flights_data:
+            ii = 1
+            with open(os.path.join(csv_file_dir, head_base, tail + "-" + str(i) + ".csv"), 'w') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(['rec-no','alt','alt-smooth','airspeed','as-smooth','climb','climb-smooth', \
+                                 'throttle','throttle-smooth','gps-relative-alt','gra-smooth'])
+                for line in data:
+                    writer.writerow([ii] + line)
+                    ii += 1
+            i += 1
+
+        # Print the summary
         log.PrintSummary()
 
-f = open("log-meta-dict", mode='w')
-pprint.pprint(logs, stream=f)
+with open("log-meta-dict", mode='w') as f:
+    pprint.pprint(logs, stream=f)
 
 ''' From logbook_generator:
 # This array holds all the .tlog filenames in the current directory
