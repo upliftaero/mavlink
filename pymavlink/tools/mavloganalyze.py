@@ -27,6 +27,7 @@ from pymavlink.mavextra import distance_two
 
 TAKEOFF_AIRSPEED = 4.0      # meters / second
 TAKEOFF_LAND_DETECTION_HYSTERESIS = 5.0     # seconds
+SMOOTHING_WEIGHT = 0.97
 
 def TimestampString(timestamp):
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
@@ -56,6 +57,7 @@ class DataStatistics():         # Should be a dict?
         self.min    = None
         self.max    = None
         self.mean   = 0.0
+        self.smoothed = None;
 
     def accumulate(self, value):
         self.n += 1
@@ -67,6 +69,10 @@ class DataStatistics():         # Should be a dict?
         delta = value - self.mean
         self.mean = self.mean + delta/self.n
         self.M2 = self.M2 + delta*(value - self.mean)
+        if self.smoothed is None:
+            self.smoothed = value
+        else:
+            self.smoothed = (value * (1 - SMOOTHING_WEIGHT)) + (self.smoothed * SMOOTHING_WEIGHT)
 
 
     def get_stats(self):
@@ -315,6 +321,7 @@ class LogFile(dict):
                     flight.altitude_stats.accumulate(m.alt)
                     flight.airspeed_stats.accumulate(m.airspeed)
                     flight.throttle_stats.accumulate(m.throttle)
+                    print str(m.alt) + ", " + str(flight.altitude_stats.smoothed)
 
                 self.hud_records.append(m)
 
