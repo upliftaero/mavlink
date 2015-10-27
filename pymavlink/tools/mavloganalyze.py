@@ -101,6 +101,8 @@ class DataStatistics():         # Should be a dict?
         stats[keys.STATS_COUNT]      = self.n
         return stats
 
+# TODO: need to reexamine flight time - we seem to be accumulating total flight time in this object?? - I think that's jsut a leftover that needs to leave...
+# Ideally - lets combine endArmed and Land
 
 class Flight(dict):
 
@@ -114,8 +116,8 @@ class Flight(dict):
         self.mode_changes = []
         self.flight_time = 0.0
         self.flying = False
-        self.last_takeoff_time = 0.0
-        self.last_landing_time = 0.0
+        self.takeoff_time = None
+        self.landing_time = None
         self.flight_state = FS_GROUND
 
         self.altitude_stats = DataStatistics();
@@ -124,33 +126,40 @@ class Flight(dict):
         self.climb_stats    = DataStatistics();
         self.elevator_stats = DataStatistics();
         self.aileron_stats  = DataStatistics();
-        self.gps_altitude_stats  = DataStatistics();
+        self.gps_altitude_stats   = DataStatistics();
         self.vfr_hud_record_rate  = DataStatistics();
 
 
     def Takeoff(self, time):      # May not have been an actual detected landing - add a reason code??
         self.flying = True
         self.takeoff_count += 1
-        self.last_takeoff_time = time
+        self.takeoff_time = time
 
     def Land(self, time):      # May not have been an actual detected landing - add a reason code??
-        self.last_landing_time = time
-        self.flight_time += (self.last_landing_time - self.last_takeoff_time)
+        self.landing_time = time
+        if self.landing_time is None or self.landing_time < 1230768000:
+            print("Unexpected small landing time (Land method): " + str(self.landing_time))
+        if self.flight_time != 0.0:
+            print("Unexpected non-zero flight time: " + str(self.flight_time))
+        self.flight_time += (self.landing_time - self.takeoff_time)
         self.flying = False
         self.landing_count += 1
 
     def EndArmed(self, total_time):
         if self.landing_count != 1 or self.takeoff_count != 1:
             print("Unexpected takeoff/landing count: " + str(self.takeoff_count) + " / " + str(self.landing_count))
-        self[keys.FLIGHT_TAKEOFF_COUNT]     = self.takeoff_count
-        self[keys.FLIGHT_LANDING_COUNT]     = self.landing_count
         self[keys.FLIGHT_FLIGHT_TIME]       = self.flight_time
         self[keys.FLIGHT_FLIGHT_TIME_STR]   = MMSSTime(self.flight_time)
-        self[keys.FLIGHT_START_TIME]        = self.last_takeoff_time
-        self[keys.FLIGHT_START_TIME_STR]    = TimestampString(self.last_takeoff_time)
-        self[keys.FLIGHT_END_TIME]          = self.last_landing_time
-        self[keys.FLIGHT_END_TIME_STR]      = TimestampString(self.last_landing_time)
-        self[keys.FLIGHT_TOTAL_TIME]        = total_time
+        self[keys.FLIGHT_TAKEOFF_TIME]      = self.takeoff_time
+        self[keys.FLIGHT_TAKEOFF_TIME_STR]  = TimestampString(self.takeoff_time)
+        self[keys.FLIGHT_LAND_TIME]          = self.landing_time
+        self[keys.FLIGHT_LAND_TIME_STR]      = TimestampString(self.landing_time)
+        if self.landing_time is None or self.landing_time < 1230768000:
+            print("Unexpected small landing time: " + str(self.landing_time))
+
+        self[keys.FLIGHT_TAKEOFF_COUNT]     = self.takeoff_count
+        self[keys.FLIGHT_LANDING_COUNT]     = self.landing_count
+        self[keys.FLIGHT_TOTAL_TIME]        = total_time        # TODO Is this necessary???
         self[keys.FLIGHT_MODE_CHANGES]      = self.mode_changes
         self[keys.FLIGHT_INITIAL_MODE]      = self.initial_mode
         self[keys.FLIGHT_ALTITUDE_STATS]    = self.altitude_stats.get_stats()
@@ -181,8 +190,9 @@ class LogFile(dict):
         self.armed_time = 0.0            # The total time the vehicle was armed (seconds)
 
         self.start_time = None           # The datetime of the first received message (seconds since epoch)
-        self.total_dist = 0.0            # The total ground distance travelled (meters)
         self.true_time = None            # Track the first timestamp found that corresponds to a UNIX timestamp
+
+        self.total_dist = 0.0            # The total ground distance travelled (meters)
 
         # Do we need to weight the cum's / counts by time delta?
         self.hud_records = []
@@ -221,6 +231,7 @@ class LogFile(dict):
         last_timestamp  = 0.0
         last_second_timestamp  = 0.0
         altitude_samples = deque([], maxlen = ALT_STACK_DEPTH)
+        timestamp = None
 
         while True:
             m = self.mlog.recv_match(condition=args.condition)
@@ -308,7 +319,7 @@ class LogFile(dict):
                     self.armed_time += timestamp - start_armed_time
                     if flight.flying:
                         print("Landing (by end of arm)!! at: " + TimestampString(timestamp))
-                        flight.Land(timestamp - airspeed_rise_start)
+                        flight.Land(timestamp)
                     flight.EndArmed(timestamp - start_armed_time)
                     flight = None
 
@@ -356,7 +367,7 @@ class LogFile(dict):
                         flight.vfr_hud_record_rate.accumulate(timestamp - last_timestamp)
                     last_timestamp = timestamp
                     if last_gps_raw_alt is not None:
-                        flight_data.append([timestamp, m.alt, flight.altitude_stats.smoothed, m.airspeed, flight.airspeed_stats.smoothed,
+                        flight_data.append([TimestampString(timestamp), flight.flight_state * 10, m.alt, flight.altitude_stats.smoothed, m.airspeed, flight.airspeed_stats.smoothed,
                                             m.climb, flight.climb_stats.smoothed, m.throttle, flight.throttle_stats.smoothed,
                                             last_gps_raw_alt / 1000.0, flight.gps_altitude_stats.smoothed / 1000.0])
 
@@ -464,7 +475,7 @@ class LogFile(dict):
         if armed:
             self.armed_time += timestamp - start_armed_time
             if flight.flying:
-                print("Log ended while flying!!!!")
+                print("Log ended while flying!!!!: " + TimestampString(timestamp))
                 flight.Land(timestamp)
                 flight_data = None
                 last_gps_raw_alt = None
@@ -475,15 +486,21 @@ class LogFile(dict):
         # Compute the total logtime, checking that timestamps are 2009 or newer for validity
         # (MAVLink didn't exist until 2009)
         if self.true_time:
-            print("Log started at about " + TimestampString(self.true_time))
+            print("Log started at: " + TimestampString(self.true_time))
         else:
             print("Warning: No absolute timestamp found in datastream. No starting time can be provided for this log.")
 
         self.total_time = timestamp - self.start_time
         self[keys.LOG_PARAMETERS] = parameters
 
-        self[keys.LOG_RECORD_COUNT]    = self.record_count
+        self[keys.LOG_START_TIME]      = self.start_time
+        self[keys.LOG_END_TIME]        = timestamp
         self[keys.LOG_TOTAL_TIME]      = self.total_time
+        self[keys.LOG_START_TIME_STR]  = TimestampString(self.start_time)
+        self[keys.LOG_END_TIME_STR]    = TimestampString(timestamp)
+        self[keys.LOG_TOTAL_TIME_STR]  = MMSSTime(self.total_time)
+
+        self[keys.LOG_RECORD_COUNT]    = self.record_count
         self[keys.LOG_AUTONOMOUS_SECTIONS]      = self.autonomous_sections
         self[keys.LOG_AUTONOMOUS_TIME] = self.auto_time
         self[keys.LOG_ARMED_SECTIONS]  = self.armed_sections
@@ -526,9 +543,9 @@ class LogFile(dict):
         else:
             print("Warning: No GPS data found, can't give position summary.")
 
-        print("Flights: ")
-        pprint.pprint(self.flights)
-        print
+        #print("Flights: ")
+        #pprint.pprint(self.flights)
+        #print
 
 # End of LogFile class
 
@@ -541,12 +558,11 @@ create_path_if_needed(csv_file_dir)
 
 for filename in args.logs:
     for f in glob.glob(filename):
-        print ("File name: " + f)
         lower_filename = f.lower()
         aircraft_type = "Unknown"
         if "waliid" in lower_filename:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
             aircraft_type = "Waliid"
-        if "bixler" in lower_filename:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
+        if "bixler" in lower_filename or "bix" in lower_filename:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
             aircraft_type = "Bixler"
         if "fx-61" in lower_filename or "fx61" in lower_filename:        # This is a hack as it's looking in the directory name and the filename and it's very chancy in any case
             aircraft_type = "FX-61"

@@ -39,8 +39,13 @@ for log in log_meta_data.values():
         csv_dict = {}
         csv_dict["directory"] = head
         csv_dict["file"] = tail
-        csv_dict["aircraft type"] = log[keys.LOG_AIRCRAFT_TYPE]
+
+        csv_dict["log start time"] = log[keys.LOG_START_TIME_STR]
+        csv_dict["log end time"] = log[keys.LOG_END_TIME_STR]
         csv_dict["log total time"] = log[keys.LOG_TOTAL_TIME]
+        csv_dict["log total time string"] = log[keys.LOG_TOTAL_TIME_STR]
+
+        csv_dict["aircraft type"] = log[keys.LOG_AIRCRAFT_TYPE]
         csv_dict["log record count"] = log[keys.LOG_RECORD_COUNT]
         csv_dict["log auto sections"] = log[keys.LOG_AUTONOMOUS_SECTIONS]
         csv_dict["log auto time"] = log[keys.LOG_AUTONOMOUS_TIME]
@@ -50,12 +55,13 @@ for log in log_meta_data.values():
         #csv_dict["log total distance"] = log['total_diatance']  # Hack to workaround a (fixed) bug...
         csv_dict["mixing gain"] = log[keys.LOG_MIXING_GAIN]
 
+        csv_dict["flight time"]         = flight[keys.FLIGHT_FLIGHT_TIME_STR]
+        csv_dict["flight start time"]   = flight[keys.FLIGHT_TAKEOFF_TIME_STR]
+        csv_dict["flight end time"]     = flight[keys.FLIGHT_LAND_TIME_STR]
+
         csv_dict["flight number"]       = flight[keys.FLIGHT_FLIGHT_NUMBER]
         csv_dict["flight takeoffs"]     = flight[keys.FLIGHT_TAKEOFF_COUNT]
         csv_dict["flight landings"]     = flight[keys.FLIGHT_LANDING_COUNT]
-        csv_dict["flight time"]         = flight[keys.FLIGHT_FLIGHT_TIME_STR]
-        csv_dict["start_time"]          = flight[keys.FLIGHT_START_TIME_STR]
-        csv_dict["end_time"]            = flight[keys.FLIGHT_END_TIME_STR]
         csv_dict["flight initial mode"] = flight[keys.FLIGHT_INITIAL_MODE]
         add_stats(csv_dict, "altitude", flight[keys.FLIGHT_ALTITUDE_STATS])
         add_stats(csv_dict, "airspeed", flight[keys.FLIGHT_AIRSPEED_STATS])
