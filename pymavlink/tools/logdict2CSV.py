@@ -60,16 +60,26 @@ for log in log_meta_data.values():
         csv_dict["flight end time"]     = flight[keys.FLIGHT_LAND_TIME_STR]
 
         csv_dict["flight number"]       = flight[keys.FLIGHT_FLIGHT_NUMBER]
-        csv_dict["flight takeoffs"]     = flight[keys.FLIGHT_TAKEOFF_COUNT]
-        csv_dict["flight landings"]     = flight[keys.FLIGHT_LANDING_COUNT]
         csv_dict["flight initial mode"] = flight[keys.FLIGHT_INITIAL_MODE]
-        add_stats(csv_dict, "altitude", flight[keys.FLIGHT_ALTITUDE_STATS])
-        add_stats(csv_dict, "airspeed", flight[keys.FLIGHT_AIRSPEED_STATS])
-        add_stats(csv_dict, "throttle", flight[keys.FLIGHT_THROTTLE_STATS])
-        add_stats(csv_dict, "elevator deflection", flight[keys.FLIGHT_ELEVATOR_STATS])
-        add_stats(csv_dict, "aileron deflection", flight[keys.FLIGHT_AILERON_STATS])
 
-        log_list.append(csv_dict)
+        for segment in flight["segments"]:
+            segment_dict = csv_dict.copy()
+            segment_dict["segment number"]      = segment[keys.SEGMENT_NUMBER]
+            segment_dict["segment time"]        = segment[keys.SEGMENT_TIME]
+            segment_dict["segment time string"] = segment[keys.SEGMENT_TIME_STR]
+            segment_dict["segment mode"]        = segment[keys.SEGMENT_FLIGHT_MODE]
+            segment_dict["segment mode string"] = segment[keys.SEGMENT_FLIGHT_MODE_STR]
+            segment_dict["segment flight state"] = segment[keys.SEGMENT_FLIGHT_STATE]
+
+            add_stats(segment_dict, "altitude", segment[keys.SEGMENT_ALTITUDE_STATS])
+            add_stats(segment_dict, "airspeed", segment[keys.SEGMENT_AIRSPEED_STATS])
+            add_stats(segment_dict, "throttle", segment[keys.SEGMENT_THROTTLE_STATS])
+            add_stats(segment_dict, "elevator deflection", segment[keys.SEGMENT_ELEVATOR_STATS])
+            add_stats(segment_dict, "aileron deflection", segment[keys.SEGMENT_AILERON_STATS])
+            add_stats(segment_dict, "GPS altitude", segment[keys.SEGMENT_GPS_ALT_STATS])
+            add_stats(segment_dict, "climb", segment[keys.SEGMENT_CLIMB_STATS])
+
+            log_list.append(segment_dict)
 
 
 # This is for pulling keys from a double layer dictionary
