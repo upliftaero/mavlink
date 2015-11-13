@@ -54,7 +54,7 @@ def TwoDec(number):
     return "{:.2f}".format(number)
 
 def MMSSTime(time):
-    return "{:3.0f}:{:02.0f}".format(int(time / 60), time % 60)
+    return " {:4.0f}:{:02.0f}".format(int(time / 60), time % 60)     # Need to ensure a space at the beginning of the string to keep Excel from interpreting it as a time (even though it is quoted in the CSV
 
 def create_path_if_needed(path):
     try:
@@ -144,6 +144,8 @@ class FlightSegment(dict):
         segment_time                        = time - self.start_time
         self[keys.SEGMENT_TIME]             = segment_time
         self[keys.SEGMENT_TIME_STR]         = MMSSTime(segment_time)
+        self[keys.SEGMENT_START_TIME]       = self.start_time
+        self[keys.SEGMENT_START_TIME_STR]   = MMSSTime(self.start_time)
 
 
 # TODO: need to reexamine flight time - we seem to be accumulating total flight time in this object?? - I think that's just a leftover that needs to leave...

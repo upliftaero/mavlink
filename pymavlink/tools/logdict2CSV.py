@@ -67,6 +67,7 @@ for log in log_meta_data.values():
             segment_dict["segment number"]      = segment[keys.SEGMENT_NUMBER]
             segment_dict["segment time"]        = segment[keys.SEGMENT_TIME]
             segment_dict["segment time string"] = segment[keys.SEGMENT_TIME_STR]
+            segment_dict["segment start time string"] = segment[keys.SEGMENT_START_TIME_STR]
             segment_dict["segment mode"]        = segment[keys.SEGMENT_FLIGHT_MODE]
             segment_dict["segment mode string"] = segment[keys.SEGMENT_FLIGHT_MODE_STR]
             segment_dict["segment flight state"] = segment[keys.SEGMENT_FLIGHT_STATE]

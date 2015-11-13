@@ -29,6 +29,8 @@ SEGMENT_CLIMB_STATS       = 'climb_stats'
 SEGMENT_NUMBER            = 'segment_number'
 SEGMENT_TIME              = 'segment_time'
 SEGMENT_TIME_STR          = 'segment_time_str'
+SEGMENT_START_TIME        = 'start_time'
+SEGMENT_START_TIME_STR    = 'start_time_str'
 
 SEGMENT_FLIGHT_STATE      = 'flight_state'
 SEGMENT_FLIGHT_MODE       = 'flight_mode'
