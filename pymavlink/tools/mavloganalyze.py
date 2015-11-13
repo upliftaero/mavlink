@@ -42,10 +42,12 @@ args = parser.parse_args()
 from pymavlink import mavutil
 from pymavlink.mavextra import distance_two
 
-TAKEOFF_AIRSPEED = 4.0      # meters / second
+TAKEOFF_AIRSPEED        = 4.0      # meters / second
 TAKEOFF_LAND_DETECTION_HYSTERESIS = 5.0     # seconds
-SMOOTHING_WEIGHT = 0.97
-ALT_STACK_DEPTH = 5
+SMOOTHING_WEIGHT        = 0.97
+ALT_STACK_DEPTH         = 4         # Effectively is the number of seconds required for an antitude trend to constitute a flight state change
+FS_STATE_CLIMB_DELTA    = 8.0
+FS_STATE_DESCEND_DELTA  = -FS_STATE_CLIMB_DELTA
 
 def TimestampString(timestamp):
     return time.strftime("%Y-%m-%d %H:%M:%S.", time.localtime(timestamp))
@@ -175,6 +177,8 @@ class Flight(dict):
         self.segments           = []
         self.current_segment    = None
         self.current_segment_num = 1
+
+        self.flight_altitude_statistics = DataStatistics()
 
     def Takeoff(self, time, mode, mode_string, state):      # May not have been an actual detected landing - add a reason code??
         self.takeoff_time = time
@@ -418,36 +422,23 @@ class LogFile(dict):
                     self.flight.current_segment.airspeed_stats.accumulate(m.airspeed)
                     self.flight.current_segment.throttle_stats.accumulate(m.throttle)
                     self.flight.current_segment.climb_stats.accumulate(m.climb)          # TODO: Don't see these in output?
+
+                    self.flight.flight_altitude_statistics.accumulate(m.alt)
                     # should be here only for diagnostics
                     if last_timestamp != 0.0:
                         self.flight.vfr_hud_record_rate.accumulate(timestamp - last_timestamp)
                     last_timestamp = timestamp
-                    if last_gps_raw_alt is not None:
-                        flight_data.append([TimestampString(timestamp),
-                                            self.flight.flight_state * 10,      # * 10 for visibility in the graph
-                                            self.flight.current_segment[keys.SEGMENT_NUMBER],
-                                            self.current_mode_string,
-                                            m.alt,
-                                            self.flight.current_segment.altitude_stats.smoothed,
-                                            m.airspeed,
-                                            self.flight.current_segment.airspeed_stats.smoothed,
-                                            m.climb,
-                                            self.flight.current_segment.climb_stats.smoothed,
-                                            m.throttle,
-                                            self.flight.current_segment.throttle_stats.smoothed,
-                                            last_gps_raw_alt])
-                                            #  self.flight.current_segment.gps_altitude_stats.smoothed])  TODO leave this off temporarily to avoid a None exception
 
                     # This detection is now different because we do it per segment - which means that every segment change with start over - probably need to add back in altitude_stats for flights
-                    if timestamp - last_second_timestamp > 1.0 and self.flight.current_segment.altitude_stats.smoothed is not None:  # These initialization checks are expensive
-                        altitude_samples.append(self.flight.current_segment.altitude_stats.smoothed)
+                    if timestamp - last_second_timestamp > 1.0 and self.flight.flight_altitude_statistics.smoothed is not None:  # These initialization checks are expensive
+                        altitude_samples.append(self.flight.flight_altitude_statistics.smoothed)
                         last_second_timestamp = timestamp
                         if len(altitude_samples) == ALT_STACK_DEPTH:
                             delta = altitude_samples[ALT_STACK_DEPTH - 1] - altitude_samples[0]
                             last_flight_state = self.flight.flight_state
-                            if delta > 6.0:       # Make this a constant
+                            if delta > FS_STATE_CLIMB_DELTA:
                                 self.flight.flight_state = FS_CLIMB
-                            elif delta < -6.0:
+                            elif delta < FS_STATE_DESCEND_DELTA:
                                 self.flight.flight_state = FS_DESCENT
                             else:
                                 self.flight.flight_state = FS_LEVEL
@@ -455,6 +446,23 @@ class LogFile(dict):
                             if last_flight_state != self.flight.flight_state:
                                 self.flight.ChangeSegment(timestamp)
                                 print("Flight state transition @ " + TimestampString(timestamp) + ": " + str(last_flight_state) + " to " + str(self.flight.flight_state) + ": " + str(delta))
+                        if last_gps_raw_alt is not None:
+                            gps_alt_smooth = self.flight.current_segment.gps_altitude_stats.smoothed
+                            flight_data.append([TimestampString(timestamp),
+                                                self.flight.flight_state * 10,      # * 10 for visibility in the graph
+                                                self.flight.current_segment[keys.SEGMENT_NUMBER],
+                                                self.current_mode_string,
+                                                m.alt,
+                                                self.flight.current_segment.altitude_stats.smoothed,
+                                                self.flight.flight_altitude_statistics.smoothed,
+                                                m.airspeed,
+                                                self.flight.current_segment.airspeed_stats.smoothed,
+                                                m.climb,
+                                                self.flight.current_segment.climb_stats.smoothed,
+                                                m.throttle,
+                                                self.flight.current_segment.throttle_stats.smoothed,
+                                                last_gps_raw_alt,
+                                                gps_alt_smooth if gps_alt_smooth is not None else 0])
 
                 self.hud_records.append(m)
 
@@ -641,8 +649,9 @@ for filename in args.logs:
             ii = 1
             with open(os.path.join(csv_file_dir, head_base, tail + "-" + str(i) + ".csv"), 'w') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(['record number','time', 'flight state', 'segment number', 'mode', 'alt','alt smooth','airspeed','as smooth','climb','climb smooth', \
-                                 'throttle','throttle smooth','gps relative-alt','gra smooth'])
+                writer.writerow(['record number','time', 'flight state', 'segment number', 'mode', 'alt','alt smooth','flight alt smooth',
+                                 'airspeed','as smooth','climb','climb smooth', \
+                                 'throttle','throttle smooth','gps relative alt','gra smooth'])
                 for line in data:
                     writer.writerow([ii] + line)
                     ii += 1
