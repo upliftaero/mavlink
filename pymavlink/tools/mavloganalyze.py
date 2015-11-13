@@ -145,7 +145,7 @@ class FlightSegment(dict):
         self[keys.SEGMENT_TIME]             = segment_time
         self[keys.SEGMENT_TIME_STR]         = MMSSTime(segment_time)
         self[keys.SEGMENT_START_TIME]       = self.start_time
-        self[keys.SEGMENT_START_TIME_STR]   = MMSSTime(self.start_time)
+        self[keys.SEGMENT_START_TIME_STR]   = TimestampString(self.start_time)
 
 
 # TODO: need to reexamine flight time - we seem to be accumulating total flight time in this object?? - I think that's just a leftover that needs to leave...
@@ -407,8 +407,9 @@ class LogFile(dict):
                 self.flight.current_segment.aileron_stats.accumulate(m.servo4_raw)
 
             elif m.get_type() == 'GLOBAL_POSITION_INT' and self.flight is not None:
-                self.flight.current_segment.gps_altitude_stats.accumulate(m.relative_alt / 1000.0)
-                last_gps_raw_alt = m.relative_alt
+                gps_alt = m.relative_alt / 1000.0
+                self.flight.current_segment.gps_altitude_stats.accumulate(gps_alt)
+                last_gps_raw_alt = gps_alt
 
             elif m.get_type() == 'VFR_HUD' and armed:
                 if self.flight is not None:
@@ -423,23 +424,26 @@ class LogFile(dict):
                     last_timestamp = timestamp
                     if last_gps_raw_alt is not None:
                         flight_data.append([TimestampString(timestamp),
-                                            self.flight.flight_state * 10,
+                                            self.flight.flight_state * 10,      # * 10 for visibility in the graph
+                                            self.flight.current_segment[keys.SEGMENT_NUMBER],
+                                            self.current_mode_string,
                                             m.alt,
                                             self.flight.current_segment.altitude_stats.smoothed,
                                             m.airspeed,
                                             self.flight.current_segment.airspeed_stats.smoothed,
-                                            m.climb, self.flight.current_segment.climb_stats.smoothed,
+                                            m.climb,
+                                            self.flight.current_segment.climb_stats.smoothed,
                                             m.throttle,
                                             self.flight.current_segment.throttle_stats.smoothed,
-                                            last_gps_raw_alt / 1000.0])
-                                            #  self.flight.current_segment.gps_altitude_stats.smoothed / 1000.0])  TODO leave this off temporarily to avoid a None exception
+                                            last_gps_raw_alt])
+                                            #  self.flight.current_segment.gps_altitude_stats.smoothed])  TODO leave this off temporarily to avoid a None exception
 
                     # This detection is now different because we do it per segment - which means that every segment change with start over - probably need to add back in altitude_stats for flights
                     if timestamp - last_second_timestamp > 1.0 and self.flight.current_segment.altitude_stats.smoothed is not None:  # These initialization checks are expensive
                         altitude_samples.append(self.flight.current_segment.altitude_stats.smoothed)
                         last_second_timestamp = timestamp
                         if len(altitude_samples) == ALT_STACK_DEPTH:
-                            delta = altitude_samples[0] - altitude_samples[ALT_STACK_DEPTH - 1]
+                            delta = altitude_samples[ALT_STACK_DEPTH - 1] - altitude_samples[0]
                             last_flight_state = self.flight.flight_state
                             if delta > 6.0:       # Make this a constant
                                 self.flight.flight_state = FS_CLIMB
@@ -449,7 +453,7 @@ class LogFile(dict):
                                 self.flight.flight_state = FS_LEVEL
                             # Flight state change
                             if last_flight_state != self.flight.flight_state:
-                                self.flight.ChangeSegment(timestamp)         # Assumes flight is not None - which the code above does not
+                                self.flight.ChangeSegment(timestamp)
                                 print("Flight state transition @ " + TimestampString(timestamp) + ": " + str(last_flight_state) + " to " + str(self.flight.flight_state) + ": " + str(delta))
 
                 self.hud_records.append(m)
@@ -602,6 +606,8 @@ except IOError as exception:
         raise
     print(">>> No aircraft configuration file")
 
+processed_files = 0
+
 for filename in args.logs:
     for f in glob.glob(filename):
         lower_filename = f.lower()
@@ -635,8 +641,8 @@ for filename in args.logs:
             ii = 1
             with open(os.path.join(csv_file_dir, head_base, tail + "-" + str(i) + ".csv"), 'w') as csvfile:
                 writer = csv.writer(csvfile)
-                writer.writerow(['rec-no','alt','alt-smooth','airspeed','as-smooth','climb','climb-smooth', \
-                                 'throttle','throttle-smooth','gps-relative-alt','gra-smooth'])
+                writer.writerow(['record number','time', 'flight state', 'segment number', 'mode', 'alt','alt smooth','airspeed','as smooth','climb','climb smooth', \
+                                 'throttle','throttle smooth','gps relative-alt','gra smooth'])
                 for line in data:
                     writer.writerow([ii] + line)
                     ii += 1
@@ -666,6 +672,7 @@ for filename in args.logs:
                     ac["aircraft_version"]       = {str(today): "1.0", str(tomorrow): "TBD"}
                     ac["software_version"]       = {str(today): "1.0", str(tomorrow): "TBD"}
                     aircraft[this_mav] = ac
+        processed_files += 1
 
 with open("log-meta-dict.dict", mode='w') as f:
     pprint.pprint(logs, stream=f)
@@ -673,6 +680,12 @@ with open("log-meta-dict.dict", mode='w') as f:
 # Write the aircraft configuration seed file
 with open(aircraft_config_seed_file, mode='w') as f:
     pprint.pprint(aircraft, stream=f, width=1)          # width=1 causes pretty printer to print one key/value per line
+
+if processed_files == 0:
+    print("mavloganalyze.py: error: no files to process: " + str(args.logs))
+else:
+    print("Processed " + str(processed_files))
+
 
 ''' From logbook_generator:
 # This array holds all the .tlog filenames in the current directory
