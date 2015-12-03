@@ -120,6 +120,7 @@ class DataStatistics():         # Should be a dict?
 
 class FlightSegment(dict):
     def __init__(self, time, segment_number, mode, mode_string, state):
+        dict.__init__(self)
         self.altitude_stats = DataStatistics()
         self.airspeed_stats = DataStatistics()
         self.throttle_stats = DataStatistics()
@@ -264,7 +265,7 @@ class LogFile(dict):
     def start_flight(self, time, mode, state):
         print("==== Flight #" + str(self.flight_number) + " ====")
         self.flight = Flight(self.flight_number)
-        self.flight.initial_mode = self.mlog.flightmode     # TODO Need to reexamine XXXXXXX
+        self.flight.initial_mode = self.mlog.firstmav().flightmode     # TODO Need to reexamine XXXXXXX
         self.flight_number += 1
         self.flights.append(self.flight)
         self.flight.Takeoff(time, mode, self.current_mode_string, state)  # TODO: hack mode_string for now - rationalize all of this mode string mess
@@ -375,8 +376,10 @@ class LogFile(dict):
                         self.flight = None
 
                 if current_mode != m.base_mode:
-                    self.current_mode_string = self.mlog.flightmode         # TODO: This is just a quick hack - need to reationalize all of the mode string stuff...  And we need to detect changes in this string??
-                    # Mode change
+                    #self.current_mode_string = self.mlog.flightmode         # TODO: This is just a quick hack - need to rationalize all of the mode string stuff...  And we need to detect changes in this string??
+                    #  Hacking on two fronts...  FIXME XXXX
+                    self.current_mode_string = self.mlog.firstmav().flightmode
+                    #  Mode change
                     if (m.base_mode != 0):   # Quick hack to make it work.  Need to understand HEARTBEATS in detail
                         mode_string = ""                # TODO: this whole block is just for the debugging printf below - tear it out?
                         if (m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
@@ -395,7 +398,7 @@ class LogFile(dict):
                             mode_change[keys.MODE_CHANGE_TIME] = timestamp
                             mode_change[keys.MODE_CHANGE_OLD_MODE] = self.flight.current_mode
                             mode_change[keys.MODE_CHANGE_NEW_MODE] = m.base_mode
-                            mode_change[keys.MODE_CHANGE_MODE_NAME] = self.mlog.flightmode
+                            mode_change[keys.MODE_CHANGE_MODE_NAME] = self.mlog.firstmav().flightmode
                             self.flight.mode_changes.append(mode_change)
                             # Change flight mode and segment
                             self.flight.current_mode_str = self.current_mode_string
