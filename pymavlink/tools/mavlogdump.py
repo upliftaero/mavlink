@@ -103,7 +103,7 @@ while True:
             timestamp = getattr(m, '_timestamp', None)
             output.write(struct.pack('>Q', timestamp*1.0e6) + m.get_msgbuf())
             continue
-    if not mavutil.evaluate_condition(args.condition, mlog.messages):
+    if not mavutil.evaluate_condition(args.condition, mlog.mavs.values()[0].messages):
         continue
 
     if types is not None and m.get_type() not in types and m.get_type() != 'BAD_DATA':
